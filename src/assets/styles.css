@@ -1,0 +1,891 @@
+* {
+  box-sizing: border-box;
+}
+
+.page {
+  height: 100vh;
+  background: #e9ecef;
+  padding: 8px;
+  font-family: Arial, Helvetica, sans-serif;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.tabs-bar {
+  width: 98vw;
+  margin: 0 auto 10px auto;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.tab-btn {
+  border: 1px solid #111;
+  background: #fff;
+  padding: 10px 14px;
+  cursor: pointer;
+  font-weight: 700;
+  min-width: 110px;
+  user-select: none;
+}
+
+.tab-btn.active {
+  background: #111;
+  color: #fff;
+}
+
+.tab-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.add-btn {
+  min-width: 52px;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.stats-btn {
+  background: #f7f7f7;
+}
+
+.context-menu {
+  position: fixed;
+  z-index: 9999;
+  min-width: 180px;
+  background: #fff;
+  border: 1px solid #111;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
+  padding: 6px;
+}
+
+.context-menu-item {
+  width: 100%;
+  border: none;
+  background: transparent;
+  text-align: left;
+  padding: 10px 12px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.context-menu-item:hover {
+  background: #f3f3f3;
+}
+
+.context-menu-item.danger {
+  color: #b00020;
+}
+
+.context-menu-item.danger:hover {
+  background: #fff2f2;
+}
+
+.sheet {
+  width: 98vw;
+  max-width: none;
+  margin: 0 auto;
+  background: white;
+  border: 2px solid #111;
+  padding: 18px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.08);
+
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+  gap: 20px;
+}
+
+.logo {
+  font-size: 32px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  white-space: nowrap;
+}
+
+.title-block {
+  flex: 1;
+  text-align: center;
+}
+
+.title-block h1 {
+  margin: 0;
+  font-size: 30px;
+  font-weight: 800;
+}
+
+.sheet-id {
+  margin: 8px 0 0;
+  font-size: 14px;
+}
+
+.info-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 18px;
+  margin-bottom: 14px;
+}
+
+.field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.field label {
+  min-width: 130px;
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.field input {
+  flex: 1;
+  border: none;
+  border-bottom: 1px solid #111;
+  padding: 6px 4px;
+  font-size: 14px;
+  background: transparent;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
+
+.actions button {
+  border: 1px solid #111;
+  background: #111;
+  color: white;
+  padding: 10px 18px;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.table-wrapper {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid #111;
+}
+
+.control-table {
+  width: max-content;
+  min-width: max(100%, 1400px);
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+}
+
+.control-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+}
+
+/* Color para celdas de solo lectura (Acumulados) */
+.readonly-cell {
+  background-color: #f3f3f3; /* El gris que mencionas */
+  color: #666;
+  font-weight: 700;
+  height: 100%;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Estado de visualización normal */
+.cell-display {
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  padding: 0 2px; /* espacio izquierda y derecha */
+  overflow: hidden;
+  white-space: nowrap; /* evita salto de línea */
+  text-overflow: clip; /* corta sin ... */
+  display: flex;
+  align-items: center;
+}
+
+/* Modifica tu .cell-editor existente para que quede así: */
+.cell-editor {
+  width: 100%;
+  height: 100%;
+  outline: 2px solid #2563eb;
+  background: white;
+  padding: 6px 4px;
+  z-index: 10;
+  /* El comportamiento flex con contenteditable puede ser rebelde, 
+     bloquear el texto en una línea soluciona el desborde: */
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.control-table th,
+.control-table td {
+  border-right: 1px solid #111;
+  border-bottom: 1px solid #111;
+  text-align: center;
+  padding: 0;
+  font-size: 12px;
+  position: relative;
+  /* Elimina o comenta height: 1px; */
+  height: 32px; /* Define un alto base cómodo para el inicio */
+}
+
+/* Asegúrate de que el contenedor de la celda llene el espacio */
+.cell-content {
+  height: 100%;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px; /* Esto garantiza que no se vean "aplastadas" */
+  min-width: 0;
+}
+.control-table thead tr:first-child th {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background: #f3f3f3;
+}
+
+.control-table thead tr:nth-child(2) th {
+  position: sticky;
+  top: 26px; /* ajusta según la altura real de la primera fila */
+  z-index: 29;
+  background: #f3f3f3;
+}
+
+.control-table th {
+  background: #f3f3f3;
+  padding: 6px 4px;
+  font-weight: 700;
+}
+
+.cell-input {
+  width: 100%;
+  height: auto;
+  min-height: unset;
+  box-sizing: border-box;
+  border: none;
+  padding: 6px 4px;
+  font-size: 12px;
+  background: transparent;
+  text-align: inherit;
+  resize: none;
+  font-family: inherit;
+  overflow: hidden;
+  display: block;
+}
+
+.cell-input {
+  width: 100%;
+  height: 100%;
+}
+
+.cell-input:focus {
+  outline: 1px solid #666;
+  background: #fffef2;
+}
+
+.readonly {
+  background: #f7f7f7;
+  font-weight: 700;
+}
+
+.summary {
+  margin-top: 16px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+.summary p {
+  margin: 6px 0;
+  font-size: 14px;
+}
+
+.stats-sheet {
+  min-height: 70vh;
+}
+
+.stats-cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.stat-card {
+  border: 1px solid #111;
+  padding: 14px;
+  background: #fafafa;
+}
+
+.stat-card h3 {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+
+.stat-card p {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 800;
+}
+
+.stats-table {
+  min-width: 1000px;
+}
+
+/* Quita el borde del input y hace transparente el fondo para que se vea el del TD */
+.cell-input.input-seleccionado {
+  background-color: transparent !important;
+  outline: none !important;
+}
+
+/* Color de fondo para toda la selección */
+td.celda-seleccionada {
+  background-color: #cce5ff;
+  position: relative; /* Necesario para el borde absoluto */
+}
+
+/* Usamos un pseudo-elemento para pintar el borde EXTERIOR estilo Excel */
+td.celda-seleccionada::after {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: -1px;
+  right: -1px;
+  bottom: -1px;
+  pointer-events: none; /* Permite hacer clic a través del borde */
+  z-index: 5;
+}
+
+/* 1. Nos aseguramos de que el interior NO tenga bordes */
+td.en-portapapeles::after {
+  border-width: 0 !important; /* Apaga cualquier borde interno */
+  animation: parpadeo-portapapeles 0.8s infinite step-end;
+}
+
+/* 2. Animamos la opacidad. Es mucho más seguro y no "dibuja" líneas fantasma */
+@keyframes parpadeo-portapapeles {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+/* 3. Aplicamos el estilo punteado EXCLUSIVAMENTE a las paredes exteriores */
+td.en-portapapeles.borde-arriba::after {
+  border-top: 2px dashed #217346 !important;
+}
+td.en-portapapeles.borde-abajo::after {
+  border-bottom: 2px dashed #217346 !important;
+}
+td.en-portapapeles.borde-izq::after {
+  border-left: 2px dashed #217346 !important;
+}
+td.en-portapapeles.borde-der::after {
+  border-right: 2px dashed #217346 !important;
+}
+
+/* Aplicamos los bordes solo en los extremos correspondientes */
+td.borde-arriba::after {
+  border-top: 2px solid #0056b3;
+}
+td.borde-abajo::after {
+  border-bottom: 2px solid #0056b3;
+}
+td.borde-izq::after {
+  border-left: 2px solid #0056b3;
+}
+td.borde-der::after {
+  border-right: 2px solid #0056b3;
+}
+
+@media (max-width: 900px) {
+  .info-grid,
+  .summary,
+  .stats-cards {
+    grid-template-columns: 1fr;
+  }
+
+  .title-block h1 {
+    font-size: 22px;
+  }
+
+  .logo {
+    font-size: 24px;
+  }
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  padding: 16px;
+}
+
+.modal-box {
+  width: 100%;
+  max-width: 440px;
+  background: #fff;
+  border-radius: 16px;
+  padding: 24px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
+}
+
+.modal-box h3 {
+  margin: 0 0 12px;
+  font-size: 20px;
+  font-weight: 700;
+  color: #111827;
+}
+
+.modal-box p {
+  margin: 0;
+  color: #4b5563;
+  line-height: 1.5;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.btn-primary,
+.btn-secondary,
+.btn-danger {
+  border: none;
+  border-radius: 10px;
+  padding: 10px 16px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-primary {
+  background: #2563eb;
+  color: white;
+}
+
+.btn-secondary {
+  background: #e5e7eb;
+  color: #111827;
+}
+
+.btn-danger {
+  background: #dc2626;
+  color: white;
+}
+
+td.sin-fondo-seleccion {
+  background-color: transparent !important;
+}
+td.ultimo-pegado {
+  background-color: #cce5ff;
+  position: relative;
+}
+
+td.ultimo-pegado::after {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: -1px;
+  right: -1px;
+  bottom: -1px;
+  pointer-events: none;
+  z-index: 5;
+}
+.tabs-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tab-config {
+  margin-left: auto; /*  esto lo manda a la derecha */
+  background: transparent;
+  border: none;
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.tab-config:hover {
+  transform: rotate(20deg);
+}
+.config-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 3000;
+}
+
+.config-box {
+  width: min(900px, 95vw);
+  min-height: 500px;
+  background: #fff;
+  border-radius: 14px;
+  padding: 20px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+}
+
+.config-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+
+.config-header h2 {
+  margin: 0;
+}
+
+.config-close {
+  background: transparent;
+  border: none;
+  font-size: 20px;
+  cursor: pointer;
+}
+
+.config-login,
+.config-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.config-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.panel-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+  margin-top: 10px;
+}
+
+.panel-card {
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  padding: 16px;
+  background: #f9f9f9;
+}
+
+.panel-card h4 {
+  margin-top: 0;
+  margin-bottom: 8px;
+}
+
+.tab-config {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.tabs-actions-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tab-config {
+  background: transparent;
+  border: none;
+  font-size: 18px;
+  cursor: pointer;
+  padding: 8px 10px;
+}
+
+.tab-config:hover {
+  transform: rotate(20deg);
+}
+
+.tab-new-set {
+  border: 1px solid #111;
+  background: #111;
+  color: #fff;
+  padding: 10px 14px;
+  cursor: pointer;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* El cuadrito en la esquina de la celda */
+.fill-handle-square {
+  position: absolute;
+  bottom: -4px;
+  right: -4px;
+  width: 8px;
+  height: 8px;
+  background-color: #2563eb; /* Color azul, ajústalo a tu tema */
+  border: 1px solid white;
+  cursor: crosshair; /* Cambia el ratón a una cruz */
+  z-index: 10;
+}
+
+/* El rastro visual mientras arrastras */
+.celda-en-fill {
+  background-color: rgba(37, 99, 235, 0.1) !important;
+}
+
+td.celda-en-fill {
+  background-color: rgba(37, 99, 235, 0.1) !important;
+  position: relative;
+}
+
+td.celda-en-fill::after {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: -1px;
+  right: -1px;
+  bottom: -1px;
+  pointer-events: none;
+  z-index: 6;
+  border: 0;
+}
+
+/* mismos bordes que la selección */
+td.celda-en-fill.fill-top::after {
+  border-top: 2px solid #0056b3;
+}
+
+td.celda-en-fill.fill-bottom::after {
+  border-bottom: 2px solid #0056b3;
+}
+
+td.celda-en-fill.fill-left::after {
+  border-left: 2px solid #0056b3;
+}
+
+td.celda-en-fill.fill-right::after {
+  border-right: 2px solid #0056b3;
+}
+/* Aseguramos que los TH y TD puedan contener elementos absolutos */
+.control-table th,
+.control-table td {
+  position: relative;
+}
+
+/* Zona de agarre para cambiar el ANCHO (Columnas) */
+.resizer-col {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 5px;
+  height: 100%;
+  cursor: col-resize;
+  user-select: none;
+  z-index: 10;
+}
+
+.resizer-col:hover {
+  background-color: #2563eb; /* Se pinta azul al pasar el ratón */
+  opacity: 0.5;
+}
+
+/* Zona de agarre para cambiar el ALTO (Filas) */
+.resizer-row {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 5px;
+  cursor: row-resize;
+  user-select: none;
+  z-index: 10;
+}
+
+.resizer-row:hover {
+  background-color: #2563eb;
+  opacity: 0.5;
+}
+
+/* Barra de herramientas de formato */
+.format-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: #f7f7f7;
+  border: 1px solid #111;
+  padding: 4px 8px;
+}
+
+.toolbar-group {
+  display: flex;
+  gap: 4px;
+}
+
+.tool-btn {
+  background: white;
+  border: 1px solid #ccc;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-weight: bold;
+  font-size: 16px;
+  transition: all 0.2s;
+  color: #333;
+}
+
+.tool-btn:hover {
+  background: #e2e8f0;
+  border-color: #2563eb;
+  color: #2563eb;
+}
+
+.toolbar-separator {
+  width: 1px;
+  height: 24px;
+  background: #ccc;
+}
+
+/* 1. Generar la animación para ::before (el portapapeles) */
+td.en-portapapeles::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: -1px;
+  right: -1px;
+  bottom: -1px;
+  pointer-events: none;
+  z-index: 6;
+  border: 0;
+  animation: parpadeo-portapapeles 0.8s infinite step-end;
+}
+
+/* 2. Asignar los bordes punteados exclusivamente a las clases del portapapeles */
+td.en-portapapeles.portapapeles-arriba::before {
+  border-top: 2px dashed #217346 !important;
+}
+td.en-portapapeles.portapapeles-abajo::before {
+  border-bottom: 2px dashed #217346 !important;
+}
+td.en-portapapeles.portapapeles-izq::before {
+  border-left: 2px dashed #217346 !important;
+}
+td.en-portapapeles.portapapeles-der::before {
+  border-right: 2px dashed #217346 !important;
+}
+.btn-expand-table {
+  border: 1px solid #111;
+  background: #fff;
+  color: #111;
+  padding: 10px 18px;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.btn-expand-table:hover {
+  background: #f3f3f3;
+}
+
+.sheet.tabla-expandida {
+  padding: 10px;
+}
+
+.sheet.tabla-expandida .actions {
+  margin-bottom: 8px;
+}
+
+.sheet.tabla-expandida .table-wrapper {
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+}
+
+.sheet.tabla-expandida .control-table {
+  min-width: 1400px;
+}
+
+.sheet.tabla-expandida .format-toolbar {
+  padding: 3px 6px;
+}
+
+.sheet.tabla-expandida .tool-btn {
+  width: 30px;
+  height: 30px;
+}
+/* 🔴 NUEVO: Mantener el cursor globalmente durante el arrastre */
+body.is-resizing-col,
+body.is-resizing-col * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+body.is-resizing-row,
+body.is-resizing-row * {
+  cursor: row-resize !important;
+  user-select: none !important;
+}
+.export-loading-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.78);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  z-index: 20;
+}
+
+.export-loading-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  font-weight: 700;
+  color: #222;
+}
+
+.export-spinner {
+  width: 34px;
+  height: 34px;
+  border: 4px solid #d9d9d9;
+  border-top: 4px solid #111;
+  border-radius: 50%;
+  animation: girar-export 0.8s linear infinite;
+}
+
+@keyframes girar-export {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
