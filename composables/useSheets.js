@@ -1,4 +1,11 @@
-import { ref, computed, onMounted, onBeforeUnmount, nextTick } from "vue";
+import {
+  ref,
+  computed,
+  onMounted,
+  onBeforeUnmount,
+  nextTick,
+  watch,
+} from "vue";
 import Database from "@tauri-apps/plugin-sql";
 import ExcelJS from "exceljs";
 import { jsPDF } from "jspdf";
@@ -171,25 +178,67 @@ export function useSheets() {
     });
   };
 
-  const MAX_SHEETS = 5;
+  const MAX_SHEETS = 6;
   const TOTAL_DIAS = 70;
 
-  const crearIdConjunto = () => {
-    const fecha = Date.now().toString(36).toUpperCase();
-    const random = Math.random().toString(36).slice(2, 6).toUpperCase();
-    return `CON-${fecha}-${random}`;
+  const crearIdLote = (numero = 1) => {
+    const fecha = new Date();
+
+    const year = fecha.getFullYear();
+
+    const meses = [
+      "ENE",
+      "FEB",
+      "MAR",
+      "ABR",
+      "MAY",
+      "JUN",
+      "JUL",
+      "AGO",
+      "SEP",
+      "OCT",
+      "NOV",
+      "DIC",
+    ];
+
+    const mes = meses[fecha.getMonth()];
+
+    const numeroFormateado = String(numero).padStart(2, "0");
+
+    return `LOTE${numeroFormateado}:${mes}-${year}`;
   };
 
   const conjunto = ref({
-    id: crearIdConjunto(),
-    nombre: "Conjunto 1",
+    id: crearIdLote(),
+    nombre: "Lote 1",
     descripcion: "",
   });
 
-  const crearId = () => {
-    const fecha = Date.now().toString(36).toUpperCase();
-    const random = Math.random().toString(36).slice(2, 6).toUpperCase();
-    return `GAL-${fecha}-${random}`;
+  const crearId = (numero) => {
+    const fecha = new Date();
+
+    const year = fecha.getFullYear();
+
+    const meses = [
+      "ENE",
+      "FEB",
+      "MAR",
+      "ABR",
+      "MAY",
+      "JUN",
+      "JUL",
+      "AGO",
+      "SEP",
+      "OCT",
+      "NOV",
+      "DIC",
+    ];
+
+    const mes = meses[fecha.getMonth()];
+
+    const numeroFormateado = String(numero).padStart(2, "0");
+
+    return `GAL${numeroFormateado}:${mes}-${year}`;
   };
 
   const crearFilasVacias = () =>
@@ -210,11 +259,11 @@ export function useSheets() {
     }));
 
   const crearSheetVacia = (numero) => ({
-    id: crearId(),
+    id: crearId(numero),
     conjuntoId: conjunto.value.id,
     nombre: `Galpón ${numero}`,
     form: {
-      granja: "San Rafael",
+      granja: "",
       lote: "",
       galpon: numero.toString(),
       fechaIngreso: "",
@@ -353,13 +402,25 @@ export function useSheets() {
       destino.col !== fillEstado.value.origen.col &&
       destino.fila === fillEstado.value.origen.fila;
 
-    // Tomamos snapshot del bloque origen
+    // Tomamos snapshot del bloque origen (VALOR + FORMATO)
     const bloqueOrigen = [];
     for (let f = rangoOrigen.minFila; f <= rangoOrigen.maxFila; f++) {
       const filaDatos = [];
+
       for (let c = rangoOrigen.minCol; c <= rangoOrigen.maxCol; c++) {
-        filaDatos.push(obtenerValorActualCelda(sheet, f, c));
+        const valor = obtenerValorActualCelda(sheet, f, c);
+
+        const key = `${f}-${c}`;
+        const formato = cellFormats.value[key]
+          ? { ...cellFormats.value[key] }
+          : { h: "left", v: "middle", wrap: false };
+
+        filaDatos.push({
+          valor,
+          formato,
+        });
       }
+
       bloqueOrigen.push(filaDatos);
     }
 
@@ -376,9 +437,10 @@ export function useSheets() {
             if (COLUMNAS_SOLO_LECTURA.includes(c)) continue;
 
             const offsetCol = c - rangoOrigen.minCol;
-            const valor = bloqueOrigen[offsetFila][offsetCol];
+            const celdaOrigen = bloqueOrigen[offsetFila][offsetCol];
+            const valor = celdaOrigen.valor;
+            const formato = celdaOrigen.formato;
 
-            // validar columnas numéricas
             if (
               esColumnaNumerica(c) &&
               valor !== "" &&
@@ -390,6 +452,7 @@ export function useSheets() {
             const propiedad = COLUMNAS_MAP[c];
             if (propiedad) {
               sheet.filas[f][propiedad] = valor;
+              cellFormats.value[`${f}-${c}`] = { ...formato };
             }
           }
         }
@@ -405,7 +468,9 @@ export function useSheets() {
             if (COLUMNAS_SOLO_LECTURA.includes(c)) continue;
 
             const offsetCol = c - rangoOrigen.minCol;
-            const valor = bloqueOrigen[offsetFila][offsetCol];
+            const celdaOrigen = bloqueOrigen[offsetFila][offsetCol];
+            const valor = celdaOrigen.valor;
+            const formato = celdaOrigen.formato;
 
             if (
               esColumnaNumerica(c) &&
@@ -418,6 +483,7 @@ export function useSheets() {
             const propiedad = COLUMNAS_MAP[c];
             if (propiedad) {
               sheet.filas[f][propiedad] = valor;
+              cellFormats.value[`${f}-${c}`] = { ...formato };
             }
           }
         }
@@ -437,7 +503,9 @@ export function useSheets() {
 
           for (let f = rangoOrigen.minFila; f <= rangoOrigen.maxFila; f++) {
             const offsetFila = f - rangoOrigen.minFila;
-            const valor = bloqueOrigen[offsetFila][offsetCol];
+            const celdaOrigen = bloqueOrigen[offsetFila][offsetCol];
+            const valor = celdaOrigen.valor;
+            const formato = celdaOrigen.formato;
 
             if (
               esColumnaNumerica(c) &&
@@ -450,6 +518,7 @@ export function useSheets() {
             const propiedad = COLUMNAS_MAP[c];
             if (propiedad) {
               sheet.filas[f][propiedad] = valor;
+              cellFormats.value[`${f}-${c}`] = { ...formato };
             }
           }
         }
@@ -466,7 +535,9 @@ export function useSheets() {
 
           for (let f = rangoOrigen.minFila; f <= rangoOrigen.maxFila; f++) {
             const offsetFila = f - rangoOrigen.minFila;
-            const valor = bloqueOrigen[offsetFila][offsetCol];
+            const celdaOrigen = bloqueOrigen[offsetFila][offsetCol];
+            const valor = celdaOrigen.valor;
+            const formato = celdaOrigen.formato;
 
             if (
               esColumnaNumerica(c) &&
@@ -479,6 +550,7 @@ export function useSheets() {
             const propiedad = COLUMNAS_MAP[c];
             if (propiedad) {
               sheet.filas[f][propiedad] = valor;
+              cellFormats.value[`${f}-${c}`] = { ...formato };
             }
           }
         }
@@ -1090,19 +1162,33 @@ export function useSheets() {
     if (!propiedad) return;
 
     let valorActual = event.target.innerText ?? "";
+
+    // 🔥 NUEVO: Limpiar si el usuario pega texto con letras
+    if (esColumnaNumerica(col)) {
+      const valorLimpio = valorActual.replace(/[^0-9.,]/g, "");
+      if (valorActual !== valorLimpio) {
+        event.target.innerText = valorLimpio;
+        valorActual = valorLimpio;
+
+        // Restaurar cursor al final
+        const range = document.createRange();
+        const sel = window.getSelection();
+        range.selectNodeContents(event.target);
+        range.collapse(false);
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+    }
+
     valorActual =
       typeof valorActual === "string" ? valorActual.replace(/\r/g, "") : "";
 
-    // ✅ SOLO guardamos el valor temporal.
+    // SOLO guardamos el valor temporal.
     editingValue.value = valorActual;
 
     if (operacionPortapapeles.value) {
       cancelarPortapapeles();
     }
-
-    // ❌ HEMOS ELIMINADO LA LÓGICA QUE ACTUALIZABA `currentSheet.value.filas` AQUÍ
-    // Al no actualizar la tabla principal, Vue no re-renderiza la celda
-    // mientras escribes, y el cursor se quedará donde debe.
   };
 
   const commitCellEdit = (fila, col, callback = null) => {
@@ -1127,14 +1213,15 @@ export function useSheets() {
       if (valorFinal === "") {
         currentSheet.value.filas[fila][propiedad] = "";
       } else {
-        const numero = Number(valorFinal);
+        // 🔥 Reemplazamos coma por punto para que Javascript entienda que es decimal
+        const numero = Number(valorFinal.replace(",", "."));
+
         if (Number.isNaN(numero)) {
-          mostrarMensaje("Valor inválido", "Esta celda solo permite números.");
-          editingCell.value = null;
-          editingValue.value = "";
-          return;
+          // Ya no mostramos el mensaje, simplemente ignoramos o limpiamos el campo
+          currentSheet.value.filas[fila][propiedad] = "";
+        } else {
+          currentSheet.value.filas[fila][propiedad] = valorFinal;
         }
-        currentSheet.value.filas[fila][propiedad] = valorFinal;
       }
     } else {
       currentSheet.value.filas[fila][propiedad] = valorFinal;
@@ -1172,6 +1259,35 @@ export function useSheets() {
 
   const handleEditorKeydown = (event, fila, col) => {
     if (!isEditingCell(fila, col)) return;
+
+    // 🔥 NUEVO: Bloquear teclas no numéricas directamente
+    if (esColumnaNumerica(col)) {
+      // Permitimos teclas de navegación y borrado
+      const isControlKey = [
+        "Backspace",
+        "Tab",
+        "Escape",
+        "Enter",
+        "ArrowLeft",
+        "ArrowRight",
+        "ArrowUp",
+        "ArrowDown",
+        "Delete",
+        "Home",
+        "End",
+      ].includes(event.key);
+      // Permitimos combinaciones como Ctrl+C, Ctrl+V
+      const isShortcut =
+        (event.ctrlKey || event.metaKey) &&
+        ["a", "c", "v", "x", "A", "C", "V", "X", "z", "Z"].includes(event.key);
+      // Permitimos números, puntos y comas
+      const isNumeric = /^[0-9.,]$/.test(event.key);
+
+      if (!isControlKey && !isShortcut && !isNumeric) {
+        event.preventDefault(); // Detiene la escritura de la letra
+        return;
+      }
+    }
 
     if (event.key === "Escape") {
       event.preventDefault();
@@ -1899,19 +2015,25 @@ export function useSheets() {
     }
   };
 
-  const guardar = async () => {
+  // --- NUEVA VARIABLE DE ESTADO ---
+  const estadoGuardado = ref({
+    tipo: "idle", // 'idle', 'exito_auto', 'error_auto', 'exito_manual', 'error_manual'
+    mensaje: "",
+  });
+
+  const guardar = async (esManual = false) => {
+    // Asegurarnos de que sea un booleano puro (los botones a veces envían el objeto del evento)
+    const manual = esManual === true;
+
     if (!currentSheet.value) return;
 
     try {
       const database = await initDB();
-
       recalcularSheet(currentSheet.value);
-
       const sheet = currentSheet.value;
 
       await database.execute(
-        `INSERT OR REPLACE INTO conjuntos (id, nombre, descripcion)
-   VALUES (?, ?, ?)`,
+        `INSERT OR REPLACE INTO conjuntos (id, nombre, descripcion) VALUES (?, ?, ?)`,
         [
           conjunto.value.id,
           conjunto.value.nombre || "",
@@ -1921,8 +2043,8 @@ export function useSheets() {
 
       await database.execute(
         `INSERT OR REPLACE INTO sheets
-  (id, conjunto_id, nombre, granja, lote, galpon, fecha_ingreso, procedencia, cantidad)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (id, conjunto_id, nombre, granja, lote, galpon, fecha_ingreso, procedencia, cantidad)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           sheet.id,
           conjunto.value.id,
@@ -1943,9 +2065,9 @@ export function useSheets() {
       for (const fila of sheet.filas) {
         await database.execute(
           `INSERT INTO filas
-        (sheet_id, dia, semana, fecha, alimento_cant, alimento_diario, alimento_acum,
-         medicina, gas_diario, gas_acum, mort_diaria, mort_acum, mort_porcentaje, observacion)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          (sheet_id, dia, semana, fecha, alimento_cant, alimento_diario, alimento_acum,
+           medicina, gas_diario, gas_acum, mort_diaria, mort_acum, mort_porcentaje, observacion)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             sheet.id,
             fila.dia,
@@ -1965,19 +2087,56 @@ export function useSheets() {
         );
       }
 
-      mostrarMensaje(
-        "Guardado exitoso",
-        `Hoja ${sheet.nombre} guardada correctamente en SQLite.\nID: ${sheet.id}`,
-      );
+      console.log(`✅ Guardado completado para la hoja: ${sheet.nombre}`);
+
+      // Actualizamos el estado de éxito
+      estadoGuardado.value = {
+        tipo: manual ? "exito_manual" : "exito_auto",
+        mensaje: manual
+          ? "Guardado manual correcto"
+          : "Autoguardado correctamente",
+      };
+
+      // Opcional: Ocultar el mensaje de éxito después de 4 segundos para limpiar la pantalla
+      setTimeout(() => {
+        if (estadoGuardado.value.tipo.includes("exito")) {
+          estadoGuardado.value = { tipo: "idle", mensaje: "" };
+        }
+      }, 4000);
     } catch (error) {
       console.error("Error al guardar en SQLite:", error);
 
-      mostrarMensaje(
-        "Error al guardar",
-        `No se pudo guardar la hoja en SQLite.\n\nDetalle: ${error?.message || error}`,
-      );
+      // Actualizamos el estado de error
+      estadoGuardado.value = {
+        tipo: manual ? "error_manual" : "error_auto",
+        mensaje: manual
+          ? "Error al guardar manualmente"
+          : "Ocurrió un error al guardar automáticamente",
+      };
     }
   };
+
+  // --- LÓGICA DE AUTOGUARDADO Y AUTOCÁLCULO ---
+  let timerAutoguardado = null;
+
+  watch(
+    [sheets, conjunto],
+    () => {
+      // Limpiamos el mensaje si el usuario empieza a editar de nuevo
+      if (estadoGuardado.value.tipo.includes("exito")) {
+        estadoGuardado.value = { tipo: "idle", mensaje: "" };
+      }
+
+      if (timerAutoguardado) {
+        clearTimeout(timerAutoguardado);
+      }
+
+      timerAutoguardado = setTimeout(() => {
+        guardar(false); // Pasamos 'false' para indicar que es autoguardado
+      }, 500);
+    },
+    { deep: true },
+  );
 
   const getTotalAlimentoSheet = (sheet) =>
     sheet.filas.reduce(
@@ -2151,6 +2310,12 @@ export function useSheets() {
     const { fila, col } = seleccion.value.inicio;
 
     if (!esColumnaEditable(col)) return;
+
+    // 🔥 NUEVO: Si es columna numérica y presionan una letra, lo ignoramos por completo
+    if (esColumnaNumerica(col) && !/^[0-9.,]$/.test(tecla)) {
+      return;
+    }
+
     if (editingCell.value) return;
 
     await startCellEdit(fila, col);
@@ -2549,7 +2714,7 @@ export function useSheets() {
 
   const reiniciarConjunto = () => {
     conjunto.value = {
-      id: crearIdConjunto(),
+      id: crearIdLote(),
       nombre: `Conjunto ${Date.now()}`,
       descripcion: "",
     };
@@ -2854,6 +3019,23 @@ export function useSheets() {
     };
   };
 
+  // Nueva función para saber si un botón debe estar activo
+  const esFormatoActivo = (eje, valor) => {
+    if (!seleccion.value.inicio) return false;
+
+    // Obtenemos el formato de la celda principal de la selección actual
+    const { fila, col } = seleccion.value.inicio;
+    const formato = getFormatoCelda(fila, col);
+
+    // Si estamos consultando el ajuste de texto (wrap)
+    if (eje === "wrap") {
+      return formato.wrap === true;
+    }
+
+    // Si estamos consultando alineación horizontal (h) o vertical (v)
+    return formato[eje] === valor;
+  };
+
   onBeforeUnmount(() => {
     window.removeEventListener("blur", marcarBlurVentana);
     window.removeEventListener("focus", marcarFocusVentana);
@@ -2864,6 +3046,7 @@ export function useSheets() {
   });
 
   return {
+    esFormatoActivo,
     resetResizeCol,
     resetResizeRow,
     resizeTooltip,
@@ -2941,5 +3124,7 @@ export function useSheets() {
     cerrarExportacion,
     exportarDatos,
     exportando,
+
+    estadoGuardado,
   };
 }

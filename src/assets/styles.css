@@ -176,7 +176,7 @@
   flex: 1;
   min-height: 0;
   overflow: auto;
-  border: 1px solid #111;
+  border: 2px solid #000;
 }
 
 .control-table {
@@ -185,6 +185,8 @@
   border-collapse: separate;
   border-spacing: 0;
   table-layout: fixed;
+  border-left: 2px solid #000;
+  border-top: 2px solid #000;
 }
 
 .control-table thead {
@@ -231,18 +233,23 @@
   display: block;
   overflow: hidden;
   white-space: nowrap;
+  text-overflow: clip;
 }
 
 .control-table th,
 .control-table td {
-  border-right: 1px solid #111;
-  border-bottom: 1px solid #111;
+  border-right: 2px solid #000;
+  border-bottom: 2px solid #000;
   text-align: center;
   padding: 0;
   font-size: 12px;
   position: relative;
-  /* Elimina o comenta height: 1px; */
-  height: 32px; /* Define un alto base cómodo para el inicio */
+  height: 32px;
+}
+
+/* AÑADIDO: Forzamos SOLO a los TD a no expandir la celda */
+.control-table td {
+  max-width: 0;
 }
 
 /* Asegúrate de que el contenedor de la celda llene el espacio */
@@ -270,7 +277,7 @@
 }
 
 .control-table th {
-  background: #f3f3f3;
+  background: #e5e5e5;
   padding: 6px 4px;
   font-weight: 700;
 }
@@ -692,11 +699,6 @@ td.celda-en-fill.fill-left::after {
 td.celda-en-fill.fill-right::after {
   border-right: 2px solid #0056b3;
 }
-/* Aseguramos que los TH y TD puedan contener elementos absolutos */
-.control-table th,
-.control-table td {
-  position: relative;
-}
 
 /* Zona de agarre para cambiar el ANCHO (Columnas) */
 .resizer-col {
@@ -747,8 +749,8 @@ td.celda-en-fill.fill-right::after {
   gap: 4px;
 }
 
-.tool-btn {
-  background: white;
+.actions .tool-btn {
+  background: #fff;
   border: 1px solid #ccc;
   width: 32px;
   height: 32px;
@@ -759,10 +761,11 @@ td.celda-en-fill.fill-right::after {
   font-weight: bold;
   font-size: 16px;
   transition: all 0.2s;
-  color: #333;
+  color: #000;
+  padding: 0;
 }
 
-.tool-btn:hover {
+.actions .tool-btn:hover {
   background: #e2e8f0;
   border-color: #2563eb;
   color: #2563eb;
@@ -801,17 +804,104 @@ td.en-portapapeles.portapapeles-izq::before {
 td.en-portapapeles.portapapeles-der::before {
   border-right: 2px dashed #217346 !important;
 }
-.btn-expand-table {
-  border: 1px solid #111;
-  background: #fff;
-  color: #111;
-  padding: 10px 18px;
-  cursor: pointer;
-  font-weight: 700;
+.table-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
 }
 
-.btn-expand-table:hover {
-  background: #f3f3f3;
+.action-btn {
+  height: 42px;
+  padding: 0 16px;
+  border-radius: 10px;
+  border: 1px solid #d1d5db;
+  background: #fff;
+  color: #111827;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    background 0.2s ease,
+    border-color 0.2s ease,
+    color 0.2s ease,
+    box-shadow 0.2s ease,
+    transform 0.15s ease;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  white-space: nowrap;
+}
+
+.action-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.08);
+}
+
+.action-btn:active {
+  transform: translateY(0);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.08);
+}
+
+.action-btn svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+  overflow: visible;
+}
+
+.action-btn svg path,
+.action-btn svg line,
+.action-btn svg polyline {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.action-btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Botón expandir / contraer */
+.action-btn-secondary {
+  background: #fff;
+  color: #111827;
+  border-color: #d1d5db;
+}
+
+.action-btn-secondary:hover {
+  background: #f9fafb;
+  border-color: #9ca3af;
+}
+
+/* Botón exportar */
+.action-btn-primary {
+  background: #111827;
+  color: #fff;
+  border-color: #111827;
+}
+
+.action-btn-primary:hover {
+  background: #1f2937;
+  border-color: #1f2937;
+}
+
+/* Estado expandido más marcado */
+.action-btn-secondary.is-active {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border-color: #93c5fd;
+}
+
+.action-btn-secondary:hover {
+  background: #f9fafb;
+  border-color: #9ca3af;
+  color: #111827; /* 🔥 ESTO FALTABA */
 }
 
 .sheet.tabla-expandida {
@@ -888,4 +978,122 @@ body.is-resizing-row * {
   to {
     transform: rotate(360deg);
   }
+}
+.format-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: #f5f5f5;
+  border: 1px solid #ccc;
+}
+
+.toolbar-group {
+  display: flex;
+  gap: 4px;
+}
+
+.toolbar-separator {
+  width: 1px;
+  height: 24px;
+  background: #ccc;
+}
+
+.tool-btn {
+  width: 32px;
+  height: 32px;
+  border: 1px solid #cfcfcf;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  color: #444;
+}
+
+.tool-btn:active {
+  background: #ddd;
+}
+
+.tool-btn svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+  overflow: visible;
+}
+
+.tool-btn svg line,
+.tool-btn svg path,
+.tool-btn svg polyline {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+/* Estilo para el botón cuando está presionado/activo */
+.actions .tool-btn.active,
+.tool-btn.active {
+  background: #e2e8f0;
+  border-color: #2563eb;
+  color: #2563eb;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.1); /* Efecto hundido opcional pero recomendado */
+}
+
+/* Evitar que SVG pierda su color al estar activo */
+.tool-btn.active svg line,
+.tool-btn.active svg path,
+.tool-btn.active svg polyline {
+  stroke: #2563eb;
+}
+
+/* --- ESTILOS DE ESTADO DE GUARDADO --- */
+.save-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 999px;
+  transition: all 0.25s ease;
+}
+
+/* ÉXITO */
+.save-status.exito_auto,
+.save-status.exito_manual {
+  background: #ecfdf5;
+  color: #16a34a;
+  border: 1px solid #bbf7d0;
+}
+
+/* ERROR */
+.save-status.error_auto,
+.save-status.error_manual {
+  background: #fef2f2;
+  color: #dc2626;
+  border: 1px solid #fecaca;
+}
+
+.icon-success,
+.icon-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.icon-success svg,
+.icon-error svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Opcional: suavidad */
+.icon-success {
+  opacity: 0.9;
+}
+
+.icon-error {
+  opacity: 0.9;
 }

@@ -30,6 +30,8 @@ const handleConfigClick = async () => {
 };
 
 const {
+  estadoGuardado,
+  esFormatoActivo,
   resetResizeCol,
   resetResizeRow,
   resizeTooltip,
@@ -134,9 +136,7 @@ const {
 
       <div class="tabs-actions-right">
         <button class="tab-config" @click="handleConfigClick">⚙️</button>
-        <button class="tab-new-set" @click="nuevoConjunto">
-          Nuevo conjunto
-        </button>
+        <button class="tab-new-set" @click="nuevoConjunto">Nuevo lote</button>
       </div>
     </div>
 
@@ -165,7 +165,7 @@ const {
         <div class="title-block">
           <h1>CONTROL PARA POLLOS DE CARNE</h1>
           <p class="sheet-id">
-            <strong>Código Conjunto:</strong> {{ conjunto.id }}
+            <strong>Código Lote:</strong> {{ conjunto.id }}
           </p>
           <p class="sheet-id">
             <strong>Código Galpón:</strong> {{ currentSheet.id }}
@@ -206,7 +206,7 @@ const {
 
         <div class="field">
           <label>Galpón #:</label>
-          <input v-model="currentSheet.form.galpon" />
+          <input v-model="currentSheet.form.galpon" class="readonly" readonly />
         </div>
 
         <div class="field">
@@ -224,24 +224,47 @@ const {
           <div class="toolbar-group">
             <button
               class="tool-btn"
+              :class="{ active: esFormatoActivo('h', 'left') }"
               @click.stop="aplicarAlineacion('h', 'left')"
-              title="Alinear Izquierda"
+              title="Alinear izquierda"
+              type="button"
             >
-              ⫷
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <line x1="4" y1="6" x2="14" y2="6" />
+                <line x1="4" y1="10" x2="20" y2="10" />
+                <line x1="4" y1="14" x2="14" y2="14" />
+                <line x1="4" y1="18" x2="20" y2="18" />
+              </svg>
             </button>
+
             <button
               class="tool-btn"
+              :class="{ active: esFormatoActivo('h', 'center') }"
               @click.stop="aplicarAlineacion('h', 'center')"
               title="Centrar"
+              type="button"
             >
-              ≡
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <line x1="7" y1="6" x2="17" y2="6" />
+                <line x1="4" y1="10" x2="20" y2="10" />
+                <line x1="7" y1="14" x2="17" y2="14" />
+                <line x1="4" y1="18" x2="20" y2="18" />
+              </svg>
             </button>
+
             <button
               class="tool-btn"
+              :class="{ active: esFormatoActivo('h', 'right') }"
               @click.stop="aplicarAlineacion('h', 'right')"
-              title="Alinear Derecha"
+              title="Alinear derecha"
+              type="button"
             >
-              ⫸
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <line x1="10" y1="6" x2="20" y2="6" />
+                <line x1="4" y1="10" x2="20" y2="10" />
+                <line x1="10" y1="14" x2="20" y2="14" />
+                <line x1="4" y1="18" x2="20" y2="18" />
+              </svg>
             </button>
           </div>
 
@@ -250,24 +273,47 @@ const {
           <div class="toolbar-group">
             <button
               class="tool-btn"
+              :class="{ active: esFormatoActivo('v', 'top') }"
               @click.stop="aplicarAlineacion('v', 'top')"
-              title="Alinear Arriba"
+              title="Alinear arriba"
+              type="button"
             >
-              ↑
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <line x1="5" y1="5" x2="19" y2="5" />
+                <line x1="8" y1="9" x2="8" y2="17" />
+                <line x1="12" y1="9" x2="12" y2="17" />
+                <line x1="16" y1="9" x2="16" y2="17" />
+              </svg>
             </button>
+
             <button
               class="tool-btn"
+              :class="{ active: esFormatoActivo('v', 'middle') }"
               @click.stop="aplicarAlineacion('v', 'middle')"
-              title="Medio"
+              title="Alinear medio"
+              type="button"
             >
-              ↕
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <line x1="5" y1="12" x2="19" y2="12" />
+                <line x1="8" y1="7" x2="8" y2="17" />
+                <line x1="12" y1="7" x2="12" y2="17" />
+                <line x1="16" y1="7" x2="16" y2="17" />
+              </svg>
             </button>
+
             <button
               class="tool-btn"
+              :class="{ active: esFormatoActivo('v', 'bottom') }"
               @click.stop="aplicarAlineacion('v', 'bottom')"
-              title="Alinear Abajo"
+              title="Alinear abajo"
+              type="button"
             >
-              ↓
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <line x1="5" y1="19" x2="19" y2="19" />
+                <line x1="8" y1="7" x2="8" y2="15" />
+                <line x1="12" y1="7" x2="12" y2="15" />
+                <line x1="16" y1="7" x2="16" y2="15" />
+              </svg>
             </button>
           </div>
 
@@ -276,26 +322,116 @@ const {
           <div class="toolbar-group">
             <button
               class="tool-btn tool-btn-wrap"
+              :class="{ active: esFormatoActivo('wrap') }"
               @click.stop="aplicarAjusteTexto()"
               title="Ajustar texto"
+              type="button"
             >
-              ↵
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <line x1="4" y1="7" x2="20" y2="7" />
+                <line x1="4" y1="11" x2="14" y2="11" />
+                <path d="M14 11h2a3 3 0 0 1 0 6h-4" />
+                <polyline points="13,15 10,17 13,19" />
+              </svg>
             </button>
           </div>
         </div>
 
-        <div style="display: flex; gap: 8px">
-          <button
-            type="button"
-            class="btn-expand-table"
-            @click="toggleTablaExpandida"
+        <div style="display: flex; gap: 8px; align-items: center">
+          <div
+            v-if="estadoGuardado.tipo !== 'idle'"
+            class="save-status"
+            :class="estadoGuardado.tipo"
           >
-            {{ tablaExpandida ? "Contraer tabla" : "Expandir tabla" }}
+            <!-- ÉXITO -->
+            <span
+              v-if="estadoGuardado.tipo.includes('exito')"
+              class="icon-success"
+            >
+              <svg viewBox="0 0 24 24" fill="none">
+                <path
+                  d="M5 13l4 4L19 7"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </span>
+
+            <!-- ERROR -->
+            <span
+              v-if="estadoGuardado.tipo.includes('error')"
+              class="icon-error"
+            >
+              <svg viewBox="0 0 24 24" fill="none">
+                <path
+                  d="M6 6l12 12M18 6l-12 12"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                />
+              </svg>
+            </span>
+            <span class="status-msg">{{ estadoGuardado.mensaje }}</span>
+          </div>
+
+          <button
+            v-if="estadoGuardado.tipo.includes('error')"
+            type="button"
+            class="btn-manual-save"
+            @click="guardar(true)"
+          >
+            Guardar
           </button>
 
-          <button type="button" @click="abrirExportacion">Exportar</button>
+          <div class="table-actions">
+            <button
+              type="button"
+              class="action-btn action-btn-secondary"
+              :class="{ 'is-active': tablaExpandida }"
+              @click="toggleTablaExpandida"
+            >
+              <span class="action-btn-icon">
+                <svg
+                  v-if="!tablaExpandida"
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                >
+                  <path d="M8 3H3v5" />
+                  <path d="M16 3h5v5" />
+                  <path d="M21 16v5h-5" />
+                  <path d="M3 16v5h5" />
+                </svg>
 
-          <button @click="guardar">Calcular / Guardar</button>
+                <svg v-else viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M9 3H3v6" />
+                  <path d="M15 3h6v6" />
+                  <path d="M21 15v6h-6" />
+                  <path d="M3 15v6h6" />
+                </svg>
+              </span>
+
+              <span>
+                {{ tablaExpandida ? "Contraer tabla" : "Expandir tabla" }}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              class="action-btn action-btn-primary"
+              @click="abrirExportacion"
+            >
+              <span class="action-btn-icon">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 3v11" />
+                  <path d="M8 10l4 4 4-4" />
+                  <path d="M4 17v3h16v-3" />
+                </svg>
+              </span>
+              <span>Exportar</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -309,7 +445,7 @@ const {
                 :style="{
                   width: colWidths['semanas']
                     ? colWidths['semanas'] + 'px'
-                    : 'auto',
+                    : '80px',
                 }"
               >
                 Semanas
@@ -349,7 +485,7 @@ const {
               <th
                 rowspan="2"
                 data-col="4"
-                :style="{ width: colWidths[4] ? colWidths[4] + 'px' : 'auto' }"
+                :style="{ width: colWidths[4] ? colWidths[4] + 'px' : '130px' }"
               >
                 Medicinas / Vacunas
                 <div
@@ -364,7 +500,7 @@ const {
                 rowspan="2"
                 data-col="10"
                 :style="{
-                  width: colWidths[10] ? colWidths[10] + 'px' : 'auto',
+                  width: colWidths[10] ? colWidths[10] + 'px' : '130px',
                 }"
               >
                 Observac. y Peso
@@ -919,13 +1055,6 @@ const {
             {{ mortalidadPorcentajeFinalActual }}%
           </p>
         </div>
-
-        <div class="summary-right">
-          <p><strong>Valor venta de los pollos:</strong> ________</p>
-          <p><strong>Costo del alimento:</strong> ________</p>
-          <p><strong>Costo de vacunas y medicinas:</strong> ________</p>
-          <p><strong>Utilidad obtenida:</strong> ________</p>
-        </div>
       </div>
     </div>
 
@@ -935,7 +1064,7 @@ const {
         <div class="title-block">
           <h1>ESTADÍSTICAS GENERALES</h1>
           <p class="sheet-id">
-            <strong>Código Conjunto:</strong> {{ conjunto.id }}
+            <strong>Código Lote:</strong> {{ conjunto.id }}
           </p>
           <p class="sheet-id"><strong>Nombre:</strong> {{ conjunto.nombre }}</p>
           <p class="sheet-id">
