@@ -19,7 +19,16 @@ import { useDrive } from "./useDrive";
 export function useSheets() {
   let db = null;
 
+  const isDirty = ref(false);
+
+  const {
+    isAuthenticated: isCloudAuth,
+    uploadBackup,
+    user: googleUser,
+  } = useDrive();
+
   const initDB = async () => {
+
     if (db) return db;
 
     db = await Database.load("sqlite:pollos.db");
@@ -337,9 +346,9 @@ const abrirExportacion = () => {
   const tablaExpandida = ref(false);
   const tableWrapperRef = ref(null);
 
-  const { uploadBackup: syncToCloud, isAuthenticated: isCloudAuth } = useDrive();
 
   let fillAutoScrollFrame = null;
+
   let fillScrollDirection = 0; // -1 arriba, 1 abajo, 0 detenido
 
   const toggleTablaExpandida = () => {
@@ -2661,10 +2670,16 @@ const crearExcelBuffer = async () => {
       };
 
       // Opcional: Ocultar el mensaje de éxito después de 4 segundos para limpiar la pantalla
-      // --- DISPARAR BACKUP AUTOMÁTICO EN LA NUBE ---
-      if (isCloudAuth.value) {
-        syncToCloud(false);
+      // --- DISPARAR BACKUP AUTOMÁTICO EN LA NUBE (Solo si hay cambios pendientes) ---
+      if (isCloudAuth.value && isDirty.value) {
+        console.log("☁️ Intentando sincronización con Drive...");
+        const success = await uploadBackup(false);
+        if (success) {
+          isDirty.value = false;
+          console.log("✅ Sincronización completada. isDirty = false");
+        }
       }
+
 
       setTimeout(() => {
         if (estadoGuardado.value.tipo.includes("exito")) {
@@ -2705,6 +2720,16 @@ const crearExcelBuffer = async () => {
     },
     { deep: true },
   );
+
+  // Vigilar cambios para marcar como "sucio"
+  watch(
+    [sheets, conjunto],
+    () => {
+      isDirty.value = true;
+    },
+    { deep: true },
+  );
+
 
   const getTotalAlimentoSheet = (sheet) =>
     sheet.filas.reduce(
@@ -3728,6 +3753,9 @@ const crearExcelBuffer = async () => {
     cerrarExportacion,
     exportarDatos,
     exportando,
+    uploadBackup,
+    isDirty,
+    googleUser,
     estadoGuardado,
     setTableWrapperRef,
     pasoExportacion,
@@ -3737,3 +3765,5 @@ const crearExcelBuffer = async () => {
     toggleTodosGalpones,
   };
 }
+
+

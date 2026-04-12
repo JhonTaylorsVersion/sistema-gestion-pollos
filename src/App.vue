@@ -97,7 +97,11 @@ const cambiarAEstadisticas = () => {
   irAEstadisticas();
 };
 
+import { getCurrentWindow } from "@tauri-apps/api/window";
+
 const {
+  uploadBackup,
+  isDirty,
   pasoExportacion,
   galponesAExportar,
   siguientePasoExportacion,
@@ -106,6 +110,7 @@ const {
   selectedTabs,
   setTableWrapperRef,
   recalcularSheet,
+
   tablaConsumoActual,
   totalConsumoGrActual,
   totalFundasActual,
@@ -182,9 +187,28 @@ const {
   exportando,
 } = useSheets();
 
-onMounted(() => {
+onMounted(async () => {
   setTableWrapperRef(tableWrapperRef);
+  
+  // Lógica de Sincronización al cerrar
+  const appWindow = getCurrentWindow();
+  await appWindow.onCloseRequested(async (event) => {
+    if (isDirty.value) {
+      console.log("⚠️ Cierre detectado con cambios pendientes. Sincronizando...");
+      // Detenemos el cierre momentáneamente
+      event.preventDefault();
+      
+      // Mostramos un mensaje visual si es posible o simplemente forzamos el backup
+      // Al ser un proceso rápido de PATCH, suele tardar menos de 1-2 segundos
+      await uploadBackup(false, true); // force = true para saltar cooldown
+      
+      // Limpiamos la bandera para evitar bucles y cerramos
+      isDirty.value = false;
+      await appWindow.close();
+    }
+  });
 });
+
 </script>
 
 <template>

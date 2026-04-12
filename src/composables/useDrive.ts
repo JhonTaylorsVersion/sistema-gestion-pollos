@@ -29,7 +29,11 @@ const backups = ref<DriveFile[]>([]);
 const accessToken = ref<string | null>(localStorage.getItem("google_access_token"));
 const refreshToken = ref<string | null>(localStorage.getItem("google_refresh_token"));
 
+const lastAutoUploadTime = ref<number>(0);
+const dailyFileId = ref<string | null>(null);
+
 export function useDrive() {
+
 
   const login = async () => {
     try {
@@ -83,9 +87,11 @@ export function useDrive() {
     accessToken.value = null;
     refreshToken.value = null;
     user.value = null;
+    dailyFileId.value = null;
     localStorage.removeItem("google_access_token");
     localStorage.removeItem("google_refresh_token");
   };
+
 
   const refreshAccessToken = async () => {
     if (!refreshToken.value) return false;
@@ -161,7 +167,7 @@ export function useDrive() {
     try {
       loading.value = true;
       const response = await fetchWithAuth(
-        "https://www.googleapis.com/drive/v3/files?q=name contains 'pollos_backup_'&orderBy=createdTime desc&fields=files(id, name, createdTime, size)"
+        "https://www.googleapis.com/drive/v3/files?q=name contains 'pollos_backup_' and trashed = false&orderBy=createdTime desc&fields=files(id, name, createdTime, size)"
       );
       const data = await response.json() as any;
       backups.value = data.files || [];
@@ -172,41 +178,91 @@ export function useDrive() {
     }
   };
 
-  const uploadBackup = async (manual = true) => {
+  const findTodayBackup = async (fileName: string) => {
+    if (dailyFileId.value) return dailyFileId.value;
+
+    try {
+      const query = `name = '${fileName}' and trashed = false`;
+      const response = await fetchWithAuth(
+        `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id)`
+      );
+      const data = await response.json() as any;
+      if (data.files && data.files.length > 0) {
+        dailyFileId.value = data.files[0].id;
+        return dailyFileId.value;
+      }
+    } catch (e) {
+      console.error("Error buscando backup de hoy:", e);
+    }
+    return null;
+  };
+
+  const uploadBackup = async (manual = true, force = false) => {
+    if (!accessToken.value) return;
+
+    // Cooldown para automáticos (5 minutos = 300000 ms)
+    const now = Date.now();
+    if (!manual && !force && (now - lastAutoUploadTime.value < 300000)) {
+       console.log("☁️ Sincronización omitida (cooldown de 5 min activo)");
+       return;
+    }
+
     try {
       loading.value = true;
       const dbPath = await invoke<string>("get_db_path");
       const dbContent = await readFile(dbPath);
       
-      const now = new Date();
-      const timestamp = now.toISOString().replace(/[:.]/g, "-").slice(0, 16);
-      const fileName = `pollos_backup_${timestamp}.db`;
+      const dateStr = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+      const fileName = `pollos_backup_${dateStr}.db`;
 
-      const metadata = {
-        name: fileName,
-        mimeType: "application/octet-stream",
-      };
+      const existingId = await findTodayBackup(fileName);
 
-      const formData = new FormData();
-      formData.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
-      formData.append("file", new Blob([dbContent], { type: "application/octet-stream" }));
+      let response;
 
-      const response = await fetchWithAuth(
-        "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart",
-        {
-          method: "POST",
-          body: formData,
-        }
-      );
+      if (existingId) {
+        // ACTUALIZAR (PATCH)
+        console.log(`☁️ Actualizando backup de hoy ID: ${existingId}`);
+        response = await fetchWithAuth(
+          `https://www.googleapis.com/upload/drive/v3/files/${existingId}?uploadType=media`,
+          {
+            method: "PATCH",
+            body: dbContent,
+          }
+        );
+      } else {
+        // CREAR (POST Multipart)
+        console.log(`☁️ Creando nuevo backup diario: ${fileName}`);
+        const metadata = {
+          name: fileName,
+          mimeType: "application/octet-stream",
+        };
+
+        const formData = new FormData();
+        formData.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
+        formData.append("file", new Blob([dbContent], { type: "application/octet-stream" }));
+
+        response = await fetchWithAuth(
+          "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart",
+          {
+            method: "POST",
+            body: formData,
+          }
+        );
+
+        const data = await response.json() as any;
+        if (data.id) dailyFileId.value = data.id;
+      }
 
       if (response.ok) {
+        lastAutoUploadTime.value = Date.now();
         if (manual) {
-          await message("Copia de seguridad subida con éxito a Google Drive.", {
+          await message(`Copia de seguridad ${existingId ? 'actualizada' : 'subida'} con éxito a Google Drive.`, {
             title: "Backup Exitoso",
             kind: "info",
           });
         }
         await listBackups();
+        return true;
       } else {
         throw new Error("Fallo en la comunicación con Google Drive.");
       }
@@ -219,10 +275,13 @@ export function useDrive() {
           kind: "error",
         });
       }
+      return false;
     } finally {
       loading.value = false;
     }
   };
+
+
 
   const restoreBackup = async (fileId: string) => {
     try {
