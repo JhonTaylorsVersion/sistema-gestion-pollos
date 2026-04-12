@@ -1,6 +1,6 @@
 <script setup>
 import { ref, onMounted, watch } from "vue";
-import { useSheets } from "../composables/useSheets";
+import { useSheets } from "./composables/useSheets";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 const handleConfigClick = async () => {

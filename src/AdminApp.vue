@@ -8,6 +8,7 @@ import JSZip from "jszip";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeFile } from "@tauri-apps/plugin-fs";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { useDrive } from "./composables/useDrive";
 
 type PdfCell =
   | string
@@ -87,8 +88,8 @@ type ConjuntoResumen = {
   totalCantidad: number;
 };
 
-// Añadimos "detalle" a las secciones posibles
-type SeccionActiva = "busqueda" | "galpones" | "conjuntos" | "detalle";
+// Añadimos "detalle" y "sincronizacion" a las secciones posibles
+type SeccionActiva = "busqueda" | "galpones" | "conjuntos" | "detalle" | "sincronizacion";
 
 // Saber si la última búsqueda fue general (sin filtros)
 const busquedaSinFiltros = ref(false);
@@ -135,7 +136,7 @@ const seccionActiva = ref<SeccionActiva>("busqueda");
 // Variable para recordar a dónde debe volver el botón "Regresar"
 const origenDetalle = ref<SeccionActiva | null>(null);
 
-const seccionSidebarActiva = computed<"busqueda" | "galpones" | "conjuntos">(
+const seccionSidebarActiva = computed<"busqueda" | "galpones" | "conjuntos" | "sincronizacion">(
   () => {
     if (seccionActiva.value === "detalle") {
       if (origenDetalle.value === "galpones") return "galpones";
@@ -143,7 +144,7 @@ const seccionSidebarActiva = computed<"busqueda" | "galpones" | "conjuntos">(
       return "busqueda";
     }
 
-    return seccionActiva.value as "busqueda" | "galpones" | "conjuntos";
+    return seccionActiva.value as "busqueda" | "galpones" | "conjuntos" | "sincronizacion";
   },
 );
 
@@ -1510,6 +1511,25 @@ const totalConsumoGrActual = computed(() => {
 const totalFundasActual = computed(() => {
   return tablaConsumoActual.value.reduce((acc, fila) => acc + fila.fundas, 0);
 });
+
+// --- Lógica de Google Drive ---
+const {
+  user: userDrive,
+  loading: loadingDrive,
+  backups: backupsDrive,
+  login: loginDrive,
+  signout: signoutDrive,
+  listBackups: listBackupsDrive,
+  uploadBackup: uploadBackupDrive,
+  restoreBackup: restoreBackupDrive,
+  isAuthenticated: authenticatedDrive,
+} = useDrive();
+
+watch(seccionActiva, (newVal) => {
+  if (newVal === "sincronizacion" && authenticatedDrive.value) {
+    listBackupsDrive();
+  }
+});
 </script>
 
 <template>
@@ -1556,6 +1576,14 @@ const totalFundasActual = computed(() => {
           @click="cambiarSeccion('conjuntos')"
         >
           Lotes
+        </button>
+
+        <button
+          class="sidebar-btn"
+          :class="{ active: seccionSidebarActiva === 'sincronizacion' }"
+          @click="cambiarSeccion('sincronizacion')"
+        >
+          Sincronización
         </button>
 
         <button class="sidebar-btn" @click="cerrarSesion">Cerrar sesión</button>
@@ -2339,6 +2367,110 @@ const totalFundasActual = computed(() => {
             </div>
           </div>
         </template>
+
+        <template v-if="seccionActiva === 'sincronizacion'">
+          <div class="dashboard-header">
+            <h1>Sincronización en la Nube</h1>
+            <p>Respalda tu información en Google Drive y restáurala cuando la necesites.</p>
+          </div>
+
+          <div class="sync-container">
+            <div v-if="!authenticatedDrive" class="sync-card empty">
+              <div class="sync-icon-circle">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M12 10v6m0 0l-3-3m3 3l3-3" />
+                  <path d="M22 12c0 3-2.5 5.5-5.5 5.5s-5.5-2.5-5.5-5.5 2.5-5.5 5.5-5.5 5.5 2.5 5.5 5.5z" />
+                </svg>
+              </div>
+              <h2>Sin conexión a Google Drive</h2>
+              <p>Debes vincular tu cuenta para habilitar los respaldos automáticos y manuales.</p>
+              <button class="btn-primary" @click="loginDrive" :disabled="loadingDrive">
+                {{ loadingDrive ? "Conectando..." : "Vincular Cuenta de Google" }}
+              </button>
+            </div>
+
+            <div v-else class="sync-layout">
+              <!-- Perfil de Usuario -->
+              <div class="sync-card profile">
+                  <div class="user-info-container">
+                    <img 
+                      v-if="userDrive?.picture" 
+                      :src="userDrive.picture" 
+                      class="user-avatar" 
+                      alt="Google Avatar" 
+                      referrerpolicy="no-referrer"
+                    />
+                    <div v-else class="user-avatar-placeholder">
+                      {{ (userDrive?.name || 'G')[0] }}
+                    </div>
+                    <div class="user-details">
+                      <p class="user-name">{{ userDrive?.name || 'Usuario de Google' }}</p>
+                      <p class="user-email">{{ userDrive?.email || 'Conectado' }}</p>
+                    </div>
+                  </div>
+                <button class="btn-unlink" @click="signoutDrive">
+                  Desvincular cuenta
+                </button>
+              </div>
+
+              <!-- Botón de Acción Principal -->
+              <div class="sync-main-actions">
+                <button class="btn-primary btn-lg" @click="uploadBackupDrive(true)" :disabled="loadingDrive">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                    <polyline points="17 8 12 3 7 8" />
+                    <line x1="12" y1="3" x2="12" y2="15" />
+                  </svg>
+                  Crear Backup Manual Ahora
+                </button>
+              </div>
+
+              <!-- Lista de Backups -->
+              <div class="sync-card backups-list">
+                <div class="list-header">
+                  <h3>Copias de Seguridad Disponibles</h3>
+                  <button class="btn-icon-only" @click="listBackupsDrive" title="Actualizar lista" :disabled="loadingDrive">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <polyline points="23 4 23 10 17 10" />
+                      <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+                    </svg>
+                  </button>
+                </div>
+
+                <div v-if="loadingDrive && backupsDrive.length === 0" class="list-loading">
+                  Cargando copias de seguridad...
+                </div>
+                
+                <div v-else-if="backupsDrive.length === 0" class="list-empty">
+                  No se encontraron copias de seguridad en tu cuenta.
+                </div>
+
+                <table v-else class="backups-table">
+                  <thead>
+                    <tr>
+                      <th>Nombre del Archivo</th>
+                      <th>Fecha</th>
+                      <th>Tamaño</th>
+                      <th>Acción</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="file in backupsDrive" :key="file.id">
+                      <td>{{ file.name }}</td>
+                      <td>{{ new Date(file.createdTime).toLocaleString() }}</td>
+                      <td>{{ (Number(file.size) / 1024 / 1024).toFixed(2) }} MB</td>
+                      <td>
+                        <button class="btn-danger btn-sm" @click="restoreBackupDrive(file.id)" :disabled="loadingDrive">
+                          Restaurar
+                        </button>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </template>
       </main>
     </div>
   </div>
@@ -2934,6 +3066,39 @@ const totalFundasActual = computed(() => {
   font-weight: 800;
 }
 
+.user-info-container {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.user-avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  border: 2px solid var(--accent-color);
+  object-fit: cover;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.user-details {
+  display: flex;
+  flex-direction: column;
+}
+
+.user-name {
+  font-weight: 700;
+  color: var(--primary-color);
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.user-email {
+  font-size: 0.85rem;
+  color: #666;
+  margin: 0;
+}
+
 .stats-table {
   min-width: 1000px;
 }
@@ -3177,5 +3342,246 @@ const totalFundasActual = computed(() => {
 
 .unit-btn:hover {
   background: #f3f4f6;
+}
+
+/* --- ESTILOS DE SINCRONIZACIÓN (PREMIUM) --- */
+.sync-container {
+  padding: 24px;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.sync-card {
+  background: #ffffff;
+  border-radius: 16px;
+  padding: 24px;
+  border: 1px solid #e5e7eb;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+}
+
+.sync-card.empty {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.5rem;
+  padding: 4rem 2rem;
+  background: linear-gradient(135deg, #f9fafb 0%, #ffffff 100%);
+}
+
+.sync-icon-circle {
+  width: 90px;
+  height: 90px;
+  background: #eff6ff;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #3b82f6;
+  box-shadow: 0 10px 15px -3px rgba(59, 130, 246, 0.1);
+}
+
+.sync-icon-circle svg {
+  width: 44px;
+  height: 44px;
+}
+
+.sync-card.empty h2 {
+  margin: 0;
+  color: #111827;
+  font-size: 1.5rem;
+}
+
+.sync-card.empty p {
+  margin: 0;
+  color: #6b7280;
+  max-width: 320px;
+}
+
+.sync-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.sync-card.profile {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.user-info-container {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+}
+
+.user-avatar {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  border: 2px solid #3b82f6;
+  object-fit: cover;
+}
+
+.user-name {
+  font-weight: 700;
+  color: #111827;
+  font-size: 1.1rem;
+  margin: 0;
+}
+
+.user-email {
+  font-size: 0.85rem;
+  color: #6b7280;
+  margin: 0;
+}
+
+.btn-unlink {
+  background: #f3f4f6;
+  color: #4b5563;
+  border: 1px solid #e5e7eb;
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-unlink:hover {
+  background: #e5e7eb;
+  color: #111827;
+}
+
+.sync-main-actions {
+  display: flex;
+  justify-content: center;
+  margin: 0.5rem 0;
+}
+
+.btn-lg {
+  padding: 16px 32px;
+  font-size: 18px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-weight: 600;
+  box-shadow: 0 10px 15px -3px rgba(59, 130, 246, 0.3);
+}
+
+.btn-icon {
+  width: 24px;
+  height: 24px;
+}
+
+.backups-list {
+  padding: 0;
+  overflow: hidden;
+}
+
+.list-header {
+  padding: 20px 24px;
+  border-bottom: 1px solid #e5e7eb;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.list-header h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.backups-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.backups-table th {
+  text-align: left;
+  padding: 12px 24px;
+  background: #f9fafb;
+  font-size: 12px;
+  text-transform: uppercase;
+  color: #6b7280;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+
+.backups-table td {
+  padding: 16px 24px;
+  border-bottom: 1px solid #f3f4f6;
+  font-size: 14px;
+  color: #374151;
+}
+
+.backups-table tr:hover td {
+  background: #fdfdfd;
+}
+
+.list-empty, .list-loading {
+  padding: 48px;
+  text-align: center;
+  color: #6b7280;
+  font-style: italic;
+}
+
+.btn-icon-only {
+  background: transparent;
+  border: none;
+  color: #6b7280;
+  cursor: pointer;
+  padding: 8px;
+  border-radius: 8px;
+  transition: all 0.2s;
+}
+
+.btn-icon-only:hover {
+  background: #f3f4f6;
+  color: #111827;
+}
+
+.btn-icon-only svg {
+  width: 20px;
+  height: 20px;
+}
+
+.btn-danger {
+  background: #fee2e2;
+  color: #dc2626;
+  border: 1px solid #fecaca;
+}
+
+.btn-danger:hover {
+  background: #fecaca;
+}
+
+.btn-danger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@media (max-width: 768px) {
+  .sync-card.profile {
+    flex-direction: column;
+    text-align: center;
+    gap: 16px;
+  }
+}
+
+.user-avatar-placeholder {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: #3b82f6;
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.5rem;
+  font-weight: 700;
 }
 </style>

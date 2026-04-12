@@ -14,6 +14,7 @@ import JSZip from "jszip";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeFile } from "@tauri-apps/plugin-fs";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { useDrive } from "./useDrive";
 
 export function useSheets() {
   let db = null;
@@ -335,6 +336,8 @@ const abrirExportacion = () => {
   const ventanaPerdioFoco = ref(false);
   const tablaExpandida = ref(false);
   const tableWrapperRef = ref(null);
+
+  const { uploadBackup: syncToCloud, isAuthenticated: isCloudAuth } = useDrive();
 
   let fillAutoScrollFrame = null;
   let fillScrollDirection = 0; // -1 arriba, 1 abajo, 0 detenido
@@ -2658,6 +2661,11 @@ const crearExcelBuffer = async () => {
       };
 
       // Opcional: Ocultar el mensaje de éxito después de 4 segundos para limpiar la pantalla
+      // --- DISPARAR BACKUP AUTOMÁTICO EN LA NUBE ---
+      if (isCloudAuth.value) {
+        syncToCloud(false);
+      }
+
       setTimeout(() => {
         if (estadoGuardado.value.tipo.includes("exito")) {
           estadoGuardado.value = { tipo: "idle", mensaje: "" };

@@ -13,7 +13,25 @@
     "dialog:default",
     "fs:default",
     "fs:write-all",
+    {
+      "identifier": "fs:allow-read-file",
+      "allow": ["$APPDATA/pollos.db"]
+    },
+    {
+      "identifier": "fs:allow-write-file",
+      "allow": ["$APPDATA/pollos.db"]
+    },
     "shell:default",
-    "opener:default"
+    "opener:default",
+    "http:default",
+    {
+      "identifier": "http:allow-fetch",
+      "allow": [{ "url": "https://*.googleapis.com/*" }]
+    },
+    {
+      "identifier": "http:allow-fetch-send",
+      "allow": [{ "url": "https://*.googleapis.com/*" }]
+    }
+
   ]
 }
