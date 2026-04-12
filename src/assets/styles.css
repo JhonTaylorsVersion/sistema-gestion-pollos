@@ -28,6 +28,7 @@
   font-weight: 700;
   min-width: 110px;
   user-select: none;
+  border-radius: 6px;
 }
 
 .tab-btn.active {
@@ -159,8 +160,22 @@
 
 .actions {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
   margin-bottom: 12px;
+}
+
+.actions-left {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.actions-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .actions button {
@@ -531,17 +546,6 @@ td.ultimo-pegado::after {
   gap: 6px;
 }
 
-.tab-config {
-  margin-left: auto; /*  esto lo manda a la derecha */
-  background: transparent;
-  border: none;
-  font-size: 18px;
-  cursor: pointer;
-}
-
-.tab-config:hover {
-  transform: rotate(20deg);
-}
 .config-overlay {
   position: fixed;
   inset: 0;
@@ -611,31 +615,11 @@ td.ultimo-pegado::after {
   margin-bottom: 8px;
 }
 
-.tab-config {
-  margin-left: auto;
-  background: transparent;
-  border: none;
-  font-size: 18px;
-  cursor: pointer;
-}
-
 .tabs-actions-right {
   margin-left: auto;
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-.tab-config {
-  background: transparent;
-  border: none;
-  font-size: 18px;
-  cursor: pointer;
-  padding: 8px 10px;
-}
-
-.tab-config:hover {
-  transform: rotate(20deg);
 }
 
 .tab-new-set {
@@ -646,6 +630,7 @@ td.ultimo-pegado::after {
   cursor: pointer;
   font-weight: 700;
   white-space: nowrap;
+  border-radius: 10px;
 }
 
 /* El cuadrito en la esquina de la celda */
@@ -901,7 +886,7 @@ td.en-portapapeles.portapapeles-der::before {
 .action-btn-secondary:hover {
   background: #f9fafb;
   border-color: #9ca3af;
-  color: #111827; /* 🔥 ESTO FALTABA */
+  color: #111827; /*  ESTO FALTABA */
 }
 
 .sheet.tabla-expandida {
@@ -919,7 +904,8 @@ td.en-portapapeles.portapapeles-der::before {
 }
 
 .sheet.tabla-expandida .control-table {
-  min-width: 1400px;
+  width: max-content;
+  min-width: 100%;
 }
 
 .sheet.tabla-expandida .format-toolbar {
@@ -1096,4 +1082,206 @@ body.is-resizing-row * {
 
 .icon-error {
   opacity: 0.9;
+}
+.food-table-section {
+  margin-top: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.food-table-section h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 800;
+  color: #111827;
+}
+
+.food-table-wrapper {
+  max-height: 500px;
+  display: flex;
+  justify-content: center;
+  overflow: auto;
+}
+
+.sheet.tabla-expandida .food-table-wrapper {
+  max-height: 780px;
+  display: flex;
+  justify-content: center;
+  overflow: auto;
+}
+
+.food-table {
+  width: max-content;
+  min-width: 1500px; /*  esto la hace grande */
+}
+
+.food-table th {
+  background: #eef2f7;
+}
+
+.food-table th {
+  text-align: center;
+  padding: 8px 6px;
+  background: #eef2f7;
+}
+
+.food-table td {
+  text-align: center;
+  /* IMPORTANTE: Quitamos el padding para que los divs llenen toda la celda */
+  padding: 0;
+  /* Le damos la misma altura que tu tabla principal */
+  height: 32px;
+  /* Necesario para que el cuadrito azul de relleno se posicione bien en la esquina */
+  position: relative;
+}
+
+.view-nav-actions {
+  margin-top: 14px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.food-table-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.food-table-section {
+  margin-top: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.food-table-section h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 800;
+  color: #111827;
+}
+
+.food-table th {
+  background: #eef2f7;
+}
+
+/* modo normal */
+.food-table-wrapper--fit {
+  flex: 0 0 auto;
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 auto;
+}
+
+/* modo expandido */
+.sheet.tabla-expandida .food-table-wrapper--fit {
+  flex: 1;
+  width: 100%;
+  margin: 0;
+}
+
+.sheet.tabla-expandida .food-table-wrapper {
+  flex: 1;
+  height: 100%;
+}
+
+.sheet.tabla-expandida .food-table {
+  min-width: 100%;
+}
+
+.food-table-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.food-table-header-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.unit-switcher {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.unit-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: #333;
+}
+
+.unit-btn {
+  border: 1px solid #cfd4dc;
+  background: #fff;
+  color: #1f2937;
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.unit-btn:hover {
+  background: #f3f4f6;
+}
+/* Pestañas seleccionadas en grupo (con Ctrl) pero no activas a la vista */
+.tab-btn.tab-selected:not(.active) {
+  background: #e2e8f0;
+  border-color: #94a3b8;
+}
+
+.tabs-actions-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tab-config {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  background: #ffffff;
+  cursor: pointer;
+  padding: 0;
+  transition:
+    background 0.2s ease,
+    border-color 0.2s ease,
+    box-shadow 0.2s ease,
+    transform 0.15s ease;
+}
+
+.tab-config:hover {
+  background: #f8fafc;
+  border-color: #94a3b8;
+}
+
+.tab-config:active {
+  transform: scale(0.97);
+}
+
+.tab-config-icon {
+  width: 20px;
+  height: 20px;
+  color: #334155;
+  transition: transform 0.25s ease;
+  transform-origin: center;
+  pointer-events: none;
+}
+
+.tab-config:hover .tab-config-icon {
+  transform: rotate(20deg);
 }

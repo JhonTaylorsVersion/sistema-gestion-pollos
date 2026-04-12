@@ -1,6 +1,24 @@
 <script setup lang="ts">
-import { ref, computed } from "vue";
+import { ref, computed, watch } from "vue";
 import Database from "@tauri-apps/plugin-sql";
+import ExcelJS from "exceljs";
+import { jsPDF } from "jspdf";
+import autoTable from "jspdf-autotable";
+import JSZip from "jszip";
+import { save } from "@tauri-apps/plugin-dialog";
+import { writeFile } from "@tauri-apps/plugin-fs";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
+
+type PdfCell =
+  | string
+  | number
+  | {
+      content: string | number;
+      rowSpan?: number;
+      colSpan?: number;
+    };
+
+type PdfRow = PdfCell[];
 
 type ResultadoBusqueda = {
   codigo_conjunto: string;
@@ -359,7 +377,7 @@ const verDetalle = async (
   try {
     buscando.value = true;
 
-    // 👇 LÍNEA AÑADIDA PARA APAGAR LA AGRUPACIÓN 👇
+    //  LÍNEA AÑADIDA PARA APAGAR LA AGRUPACIÓN
     busquedaSinFiltros.value = false;
 
     const database = await initDB();
@@ -565,6 +583,933 @@ const conjuntosFiltrados = computed(() => {
     );
   });
 });
+
+// ==========================================
+// --- MODALES REUTILIZABLES DE MENSAJE Y CONFIRMACIÓN ---
+// ==========================================
+const modalMensaje = ref({
+  visible: false,
+  titulo: "",
+  texto: "",
+});
+
+const mostrarMensaje = (titulo: string, texto: string) => {
+  modalMensaje.value = { visible: true, titulo, texto };
+};
+
+const cerrarMensaje = () => {
+  modalMensaje.value.visible = false;
+};
+
+const modalConfirmacion = ref({
+  visible: false,
+  titulo: "",
+  texto: "",
+  onConfirm: null as Function | null,
+  textoConfirmar: "Aceptar",
+  tipo: "normal",
+});
+
+const abrirConfirmacion = (
+  titulo: string,
+  texto: string,
+  onConfirm: Function,
+  textoConfirmar = "Aceptar",
+  tipo = "normal",
+) => {
+  modalConfirmacion.value = {
+    visible: true,
+    titulo,
+    texto,
+    onConfirm,
+    textoConfirmar,
+    tipo,
+  };
+};
+
+const confirmarAccion = () => {
+  if (modalConfirmacion.value.onConfirm) {
+    modalConfirmacion.value.onConfirm();
+  }
+  cerrarConfirmacion();
+};
+
+const cerrarConfirmacion = () => {
+  modalConfirmacion.value = {
+    visible: false,
+    titulo: "",
+    texto: "",
+    onConfirm: null,
+    textoConfirmar: "Aceptar",
+    tipo: "normal",
+  };
+};
+
+// ==========================================
+// --- LÓGICA DE EXPORTACIÓN PARA ADMIN ---
+// ==========================================
+const modalExportacion = ref({ visible: false });
+const exportando = ref(false);
+
+const abrirExportacion = () => {
+  modalExportacion.value.visible = true;
+};
+const cerrarExportacion = () => {
+  if (!exportando.value) modalExportacion.value.visible = false;
+};
+
+const sanitizarNombreArchivo = (texto: string) => {
+  return (texto || "exportacion")
+    .toString()
+    .trim()
+    .replace(/[\\/:*?"<>|]/g, "")
+    .replace(/\s+/g, "_");
+};
+
+const sanitizarNombreHojaExcel = (texto: string, fallback = "Hoja") => {
+  const limpio = (texto || fallback)
+    .toString()
+    .replace(/[\\/*?:[\]]/g, "")
+    .trim();
+  return (limpio || fallback).slice(0, 31);
+};
+
+// Helpers para calcular el consumo total requerido por los reportes
+const getTablaConsumoGalpon = (galpon: GalponData) => {
+  const cantidadInicial = galpon.cantidad || 0;
+  return galpon.filas.map((fila) => {
+    let cantidadPollos = cantidadInicial;
+    if (USAR_MORTALIDAD_EN_CONSUMO) {
+      cantidadPollos = Math.max(0, cantidadInicial - (fila.mort_acum || 0));
+    }
+    const consumoIndividualGr = fila.alimento_diario || 0;
+    const consumoTotalGr = cantidadPollos * consumoIndividualGr;
+    const fundas = consumoTotalGr
+      ? Math.round(consumoTotalGr / GRAMOS_POR_FUNDA)
+      : 0;
+    return {
+      semana: fila.semana,
+      dia: fila.dia,
+      fecha: fila.fecha || "",
+      cantidadPollos,
+      consumoIndividualGr,
+      consumoTotalGr,
+      fundas,
+    };
+  });
+};
+
+const getTotalConsumoGrGalpon = (galpon: GalponData) =>
+  getTablaConsumoGalpon(galpon).reduce((acc, f) => acc + f.consumoTotalGr, 0);
+const getTotalFundasGalpon = (galpon: GalponData) =>
+  getTablaConsumoGalpon(galpon).reduce((acc, f) => acc + f.fundas, 0);
+
+const crearExcelBuffer = async (): Promise<Uint8Array> => {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "Sistema Gestión Pollos (Admin)";
+  workbook.created = new Date();
+
+  const nombreConjunto = galpones.value[0]?.nombre_conjunto || "";
+  const codigoConjunto = galpones.value[0]?.codigo_conjunto || "";
+
+  galpones.value.forEach((sheet, index) => {
+    const nombreGalpon = sheet.nombre || `Galpon ${index + 1}`;
+    const ws = workbook.addWorksheet(sanitizarNombreHojaExcel(nombreGalpon));
+    const cantidadInicial = Number(sheet.cantidad) || 0;
+
+    ws.columns = [
+      { key: "semana", width: 12 },
+      { key: "dia", width: 10 },
+      { key: "fecha", width: 16 },
+      { key: "alimentoCant", width: 14 },
+      { key: "alimentoDiario", width: 14 },
+      { key: "alimentoAcum", width: 14 },
+      { key: "medicina", width: 24 },
+      { key: "gasDiario", width: 14 },
+      { key: "gasAcum", width: 14 },
+      { key: "mortDiaria", width: 14 },
+      { key: "mortAcum", width: 14 },
+      { key: "mortPorcentaje", width: 14 },
+      { key: "observacion", width: 28 },
+    ];
+
+    ws.mergeCells("A1:M1");
+    ws.getCell("A1").value = "CONTROL PARA POLLOS DE CARNE";
+    ws.getCell("A1").font = { bold: true, size: 14 };
+    ws.getCell("A1").alignment = { horizontal: "center", vertical: "middle" };
+
+    ws.mergeCells("A2:M2");
+    ws.getCell("A2").value =
+      `Lote: ${nombreConjunto} | Código Lote: ${codigoConjunto}`;
+    ws.getCell("A2").alignment = { horizontal: "center" };
+
+    ws.getCell("A4").value = "Código Galpón:";
+    ws.getCell("B4").value = sheet.id || "";
+    ws.getCell("D4").value = "Granja:";
+    ws.getCell("E4").value = sheet.granja || "";
+    ws.getCell("G4").value = "Lote:";
+    ws.getCell("H4").value = sheet.lote || "";
+    ws.getCell("J4").value = "Galpón:";
+    ws.getCell("K4").value = sheet.galpon || "";
+
+    ws.getCell("A5").value = "Fecha ingreso:";
+    ws.getCell("B5").value = sheet.fecha_ingreso || "";
+    ws.getCell("D5").value = "Procedencia:";
+    ws.getCell("E5").value = sheet.procedencia || "";
+    ws.getCell("G5").value = "Cantidad:";
+    ws.getCell("H5").value = cantidadInicial;
+
+    const headerRow = 7;
+    const dataStartRow = 8;
+    const headers = [
+      "Semanas",
+      "Día",
+      "Fecha",
+      "Cant.",
+      "Diario",
+      "Acum.",
+      "Medicinas / Vacunas",
+      "Gas Diario",
+      "Gas Acum.",
+      "Mort. Diaria",
+      "Mort. Acum.",
+      "Mort. %",
+      "Observac. y Peso",
+    ];
+
+    ws.getRow(headerRow).values = headers;
+    ws.getRow(headerRow).font = { bold: true };
+    ws.getRow(headerRow).alignment = {
+      horizontal: "center",
+      vertical: "middle",
+      wrapText: true,
+    };
+    ws.getRow(headerRow).eachCell((cell) => {
+      cell.fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: "FFD9EAD3" },
+      };
+      cell.border = {
+        top: { style: "thin" },
+        left: { style: "thin" },
+        bottom: { style: "thin" },
+        right: { style: "thin" },
+      };
+    });
+
+    sheet.filas.forEach((fila, i) => {
+      const excelRow = dataStartRow + i;
+      ws.getCell(`A${excelRow}`).value = fila.semana;
+      ws.getCell(`B${excelRow}`).value = fila.dia;
+      ws.getCell(`C${excelRow}`).value = fila.fecha || "";
+      ws.getCell(`D${excelRow}`).value = fila.alimento_cant || "";
+      ws.getCell(`E${excelRow}`).value =
+        fila.alimento_diario === 0 || fila.alimento_diario === null
+          ? ""
+          : Number(fila.alimento_diario);
+      ws.getCell(`F${excelRow}`).value =
+        fila.alimento_acum === 0 || fila.alimento_acum === null
+          ? ""
+          : Number(fila.alimento_acum);
+      ws.getCell(`G${excelRow}`).value = fila.medicina || "";
+      ws.getCell(`H${excelRow}`).value =
+        fila.gas_diario === 0 || fila.gas_diario === null
+          ? ""
+          : Number(fila.gas_diario);
+      ws.getCell(`I${excelRow}`).value =
+        fila.gas_acum === 0 || fila.gas_acum === null
+          ? ""
+          : Number(fila.gas_acum);
+      ws.getCell(`J${excelRow}`).value =
+        fila.mort_diaria === 0 || fila.mort_diaria === null
+          ? ""
+          : Number(fila.mort_diaria);
+      ws.getCell(`K${excelRow}`).value =
+        fila.mort_acum === 0 || fila.mort_acum === null
+          ? ""
+          : Number(fila.mort_acum);
+      ws.getCell(`L${excelRow}`).value =
+        fila.mort_porcentaje === 0 || fila.mort_porcentaje === null
+          ? ""
+          : Number(fila.mort_porcentaje);
+      ws.getCell(`M${excelRow}`).value = fila.observacion || "";
+
+      for (let col = 1; col <= 13; col++) {
+        const cell = ws.getRow(excelRow).getCell(col);
+        cell.alignment = {
+          horizontal: col === 7 || col === 13 ? "left" : "center",
+          vertical: "middle",
+          wrapText: true,
+        };
+        cell.border = {
+          top: { style: "thin" },
+          left: { style: "thin" },
+          bottom: { style: "thin" },
+          right: { style: "thin" },
+        };
+      }
+      ws.getCell(`L${excelRow}`).numFmt = "0.00";
+    });
+
+    for (let inicio = dataStartRow; inicio < dataStartRow + 70; inicio += 7) {
+      const fin = Math.min(inicio + 6, dataStartRow + 69);
+      if (inicio <= fin) {
+        ws.mergeCells(`A${inicio}:A${fin}`);
+        ws.getCell(`A${inicio}`).alignment = {
+          horizontal: "center",
+          vertical: "middle",
+        };
+      }
+    }
+
+    const resumenRow = dataStartRow + sheet.filas.length + 2;
+    ws.getCell(`A${resumenRow}`).value = "RESUMEN";
+    ws.getCell(`A${resumenRow}`).font = { bold: true };
+    ws.getCell(`A${resumenRow + 1}`).value = "Kilos alimento consumidos:";
+    ws.getCell(`B${resumenRow + 1}`).value = sheet.totalAlimento;
+    ws.getCell(`A${resumenRow + 2}`).value = "Consumo total de gas:";
+    ws.getCell(`B${resumenRow + 2}`).value = sheet.totalGas;
+    ws.getCell(`A${resumenRow + 3}`).value = "Mortalidad total:";
+    ws.getCell(`B${resumenRow + 3}`).value = sheet.totalMortalidad;
+    ws.getCell(`A${resumenRow + 4}`).value = "Mortalidad %:";
+    ws.getCell(`B${resumenRow + 4}`).value = sheet.porcentajeMortalidad;
+    ws.getCell(`B${resumenRow + 4}`).numFmt = "0.00";
+    ws.views = [{ state: "frozen", ySplit: 7 }];
+
+    // HOJA CONSUMO
+    const wsConsumo = workbook.addWorksheet(
+      sanitizarNombreHojaExcel(`Consumo ${nombreGalpon}`),
+    );
+    wsConsumo.columns = [
+      { key: "semana", width: 12 },
+      { key: "dia", width: 10 },
+      { key: "fecha", width: 16 },
+      { key: "cantidadPollos", width: 22 },
+      { key: "consumoIndividual", width: 24 },
+      { key: "consumoTotal", width: 20 },
+      { key: "fundas", width: 15 },
+    ];
+    wsConsumo.mergeCells("A1:G1");
+    wsConsumo.getCell("A1").value =
+      `TABLA DE CONSUMO DE ALIMENTO - ${nombreGalpon.toUpperCase()}`;
+    wsConsumo.getCell("A1").font = { bold: true, size: 14 };
+    wsConsumo.getCell("A1").alignment = {
+      horizontal: "center",
+      vertical: "middle",
+    };
+    wsConsumo.mergeCells("A2:G2");
+    wsConsumo.getCell("A2").value =
+      `Lote: ${nombreConjunto} | Código Lote: ${codigoConjunto}`;
+    wsConsumo.getCell("A2").alignment = { horizontal: "center" };
+
+    const headerRowConsumo = 4;
+    const headersConsumo = [
+      "Semana",
+      "Día",
+      "Fecha",
+      "Cantidad de Pollos",
+      "Consumo Individual [gr]",
+      "Consumo Total [gr]",
+      "Fundas",
+    ];
+    wsConsumo.getRow(headerRowConsumo).values = headersConsumo;
+    wsConsumo.getRow(headerRowConsumo).font = { bold: true };
+    wsConsumo.getRow(headerRowConsumo).alignment = {
+      horizontal: "center",
+      vertical: "middle",
+      wrapText: true,
+    };
+    wsConsumo.getRow(headerRowConsumo).eachCell((cell) => {
+      cell.fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: "FFFFE599" },
+      };
+      cell.border = {
+        top: { style: "thin" },
+        left: { style: "thin" },
+        bottom: { style: "thin" },
+        right: { style: "thin" },
+      };
+    });
+
+    const tablaConsumo = getTablaConsumoGalpon(sheet);
+    const dataStartRowConsumo = 5;
+
+    tablaConsumo.forEach((fila, i) => {
+      const excelRow = dataStartRowConsumo + i;
+      wsConsumo.getCell(`A${excelRow}`).value = fila.semana;
+      wsConsumo.getCell(`B${excelRow}`).value = fila.dia;
+      wsConsumo.getCell(`C${excelRow}`).value = fila.fecha || "";
+      wsConsumo.getCell(`D${excelRow}`).value = fila.cantidadPollos;
+      wsConsumo.getCell(`E${excelRow}`).value =
+        fila.consumoIndividualGr === 0 ? "" : fila.consumoIndividualGr;
+      wsConsumo.getCell(`F${excelRow}`).value =
+        fila.consumoTotalGr === 0 ? "" : fila.consumoTotalGr;
+      wsConsumo.getCell(`G${excelRow}`).value =
+        fila.fundas === 0 ? "" : fila.fundas;
+
+      for (let col = 1; col <= 7; col++) {
+        const cell = wsConsumo.getRow(excelRow).getCell(col);
+        cell.alignment = { horizontal: "center", vertical: "middle" };
+        cell.border = {
+          top: { style: "thin" },
+          left: { style: "thin" },
+          bottom: { style: "thin" },
+          right: { style: "thin" },
+        };
+      }
+    });
+
+    for (
+      let inicio = dataStartRowConsumo;
+      inicio < dataStartRowConsumo + 70;
+      inicio += 7
+    ) {
+      const fin = Math.min(inicio + 6, dataStartRowConsumo + 69);
+      if (inicio <= fin) {
+        wsConsumo.mergeCells(`A${inicio}:A${fin}`);
+        wsConsumo.getCell(`A${inicio}`).alignment = {
+          horizontal: "center",
+          vertical: "middle",
+        };
+      }
+    }
+
+    const resumenRowConsumo = dataStartRowConsumo + tablaConsumo.length + 2;
+    wsConsumo.getCell(`A${resumenRowConsumo}`).value = "RESUMEN";
+    wsConsumo.getCell(`A${resumenRowConsumo}`).font = { bold: true };
+    wsConsumo.getCell(`A${resumenRowConsumo + 1}`).value =
+      "Consumo total alimento [gr]:";
+    wsConsumo.getCell(`C${resumenRowConsumo + 1}`).value =
+      getTotalConsumoGrGalpon(sheet);
+    wsConsumo.getCell(`A${resumenRowConsumo + 2}`).value = "Total fundas:";
+    wsConsumo.getCell(`C${resumenRowConsumo + 2}`).value =
+      getTotalFundasGalpon(sheet);
+    wsConsumo.views = [{ state: "frozen", ySplit: 4 }];
+  });
+
+  // HOJA ESTADÍSTICAS
+  const wsStats = workbook.addWorksheet("Estadisticas");
+  wsStats.columns = [
+    { key: "numero", width: 10 },
+    { key: "id", width: 22 },
+    { key: "galpon", width: 14 },
+    { key: "lote", width: 14 },
+    { key: "cantidad", width: 12 },
+    { key: "alimento", width: 16 },
+    { key: "gas", width: 14 },
+    { key: "mortalidad", width: 16 },
+    { key: "porcentaje", width: 14 },
+  ];
+  wsStats.mergeCells("A1:I1");
+  wsStats.getCell("A1").value = "ESTADÍSTICAS GENERALES";
+  wsStats.getCell("A1").font = { bold: true, size: 14 };
+  wsStats.getCell("A1").alignment = { horizontal: "center" };
+  wsStats.getRow(3).values = [
+    "#",
+    "Código Galpón",
+    "Galpón",
+    "Lote",
+    "Cantidad",
+    "Total Alimento",
+    "Total Gas",
+    "Total Mortalidad",
+    "% Mortalidad",
+  ];
+  wsStats.getRow(3).font = { bold: true };
+  wsStats.getRow(3).alignment = { horizontal: "center", vertical: "middle" };
+  wsStats.getRow(3).eachCell((cell) => {
+    cell.fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FFF4CCCC" },
+    };
+    cell.border = {
+      top: { style: "thin" },
+      left: { style: "thin" },
+      bottom: { style: "thin" },
+      right: { style: "thin" },
+    };
+  });
+
+  resumenGalpones.value.forEach((item, idx) => {
+    const row = 4 + idx;
+    wsStats.getRow(row).values = [
+      item.numero,
+      item.id,
+      item.galpon,
+      item.lote,
+      item.cantidad,
+      item.alimento,
+      item.gas,
+      item.mortalidad,
+      Number(item.porcentaje),
+    ];
+    wsStats.getCell(`I${row}`).numFmt = "0.00";
+    wsStats.getRow(row).eachCell((cell) => {
+      cell.alignment = { horizontal: "center", vertical: "middle" };
+      cell.border = {
+        top: { style: "thin" },
+        left: { style: "thin" },
+        bottom: { style: "thin" },
+        right: { style: "thin" },
+      };
+    });
+  });
+
+  const totalRow = 5 + resumenGalpones.value.length;
+  wsStats.getCell(`D${totalRow}`).value = "TOTALES";
+  wsStats.getCell(`D${totalRow}`).font = { bold: true };
+  wsStats.getCell(`E${totalRow}`).value =
+    estadisticasGenerales.value.totalCantidad;
+  wsStats.getCell(`F${totalRow}`).value =
+    estadisticasGenerales.value.totalAlimento;
+  wsStats.getCell(`G${totalRow}`).value = estadisticasGenerales.value.totalGas;
+  wsStats.getCell(`H${totalRow}`).value =
+    estadisticasGenerales.value.totalMortalidad;
+  wsStats.getCell(`I${totalRow}`).value = Number(
+    estadisticasGenerales.value.porcentajeMortalidad,
+  );
+  wsStats.getCell(`I${totalRow}`).numFmt = "0.00";
+  wsStats.getRow(totalRow).eachCell((cell) => {
+    cell.font = { bold: true };
+    cell.border = {
+      top: { style: "thin" },
+      left: { style: "thin" },
+      bottom: { style: "thin" },
+      right: { style: "thin" },
+    };
+  });
+
+  const excelBuffer = await workbook.xlsx.writeBuffer();
+  return excelBuffer instanceof Uint8Array
+    ? excelBuffer
+    : new Uint8Array(excelBuffer);
+};
+
+const crearPdfBuffer = async (): Promise<ArrayBuffer> => {
+  const doc = new jsPDF("l", "mm", "a4");
+  const margenX = 10;
+  const nombreConjunto = galpones.value[0]?.nombre_conjunto || "";
+  const codigoConjunto = galpones.value[0]?.codigo_conjunto || "";
+
+  galpones.value.forEach((sheet, index) => {
+    if (index > 0) doc.addPage("a4", "l");
+
+    doc.setFontSize(16);
+    doc.text("CONTROL PARA POLLOS DE CARNE", margenX, 12);
+    doc.setFontSize(10);
+    doc.text(
+      `Código Lote: ${codigoConjunto}   |   Nombre del lote: ${nombreConjunto}`,
+      margenX,
+      18,
+    );
+    doc.text(`Descripción: ${sheet.descripcion_conjunto || ""}`, margenX, 23);
+    doc.setFontSize(12);
+    doc.text(`${sheet.nombre} - ${sheet.id}`, margenX, 29);
+    doc.setFontSize(9);
+    doc.text(`Granja: ${sheet.granja || ""}`, margenX, 34);
+    doc.text(`Lote: ${sheet.lote || ""}`, 70, 34);
+    doc.text(`Galpón: ${sheet.galpon || ""}`, 120, 34);
+    doc.text(`Fecha ingreso: ${sheet.fecha_ingreso || ""}`, 170, 34);
+    doc.text(`Procedencia: ${sheet.procedencia || ""}`, 230, 34);
+    doc.text(`Cantidad: ${sheet.cantidad || 0}`, 280, 34, { align: "right" });
+
+    const body: PdfRow[] = [];
+    sheet.filas.forEach((fila) => {
+      const filaDatos: PdfRow = [
+        fila.dia,
+        fila.fecha || "",
+        fila.alimento_cant || "",
+        fila.alimento_diario || "",
+        fila.alimento_acum || "",
+        fila.medicina || "",
+        fila.gas_diario || "",
+        fila.gas_acum || "",
+        fila.mort_diaria || "",
+        fila.mort_acum || "",
+        fila.mort_porcentaje || "",
+        fila.observacion || "",
+      ];
+      if (Number(fila.dia) % 7 === 1) {
+        filaDatos.unshift({ content: fila.semana, rowSpan: 7 });
+      }
+      body.push(filaDatos);
+    });
+
+    autoTable(doc, {
+      startY: 38,
+      head: [
+        [
+          "Sem",
+          "Día",
+          "Fecha",
+          "Cant.",
+          "Alim. Diario",
+          "Alim. Acum.",
+          "Medicinas / Vacunas",
+          "Gas Diario",
+          "Gas Acum.",
+          "Mort. Diaria",
+          "Mort. Acum.",
+          "Mort. %",
+          "Observación",
+        ],
+      ],
+      body,
+      styles: {
+        fontSize: 7,
+        cellPadding: 1.5,
+        overflow: "linebreak",
+        halign: "center",
+        valign: "middle",
+      },
+      headStyles: { fillColor: [52, 73, 94] },
+      columnStyles: {
+        6: { cellWidth: 28, halign: "left" },
+        12: { cellWidth: 34, halign: "left" },
+      },
+      margin: { left: 8, right: 8 },
+    });
+
+    const finalY = (doc as any).lastAutoTable.finalY + 6;
+    doc.setFontSize(10);
+    doc.text(
+      `Kilos alimento consumidos: ${sheet.totalAlimento}`,
+      margenX,
+      finalY,
+    );
+    doc.text(`Consumo total de gas: ${sheet.totalGas}`, 95, finalY);
+    doc.text(`Mortalidad total: ${sheet.totalMortalidad}`, 170, finalY);
+    doc.text(`Mortalidad %: ${sheet.porcentajeMortalidad}%`, 245, finalY);
+
+    // HOJA CONSUMO (PDF)
+    doc.addPage("a4", "l");
+    doc.setFontSize(14);
+    doc.text(
+      `TABLA DE CONSUMO DE ALIMENTO - ${sheet.nombre.toUpperCase()}`,
+      margenX,
+      12,
+    );
+    doc.setFontSize(9);
+    doc.text(`Código Lote: ${codigoConjunto}`, margenX, 18);
+    doc.text(`Lote: ${sheet.lote || ""}`, 90, 18);
+    doc.text(`Galpón: ${sheet.galpon || ""}`, 150, 18);
+
+    const tablaConsumo = getTablaConsumoGalpon(sheet);
+    const bodyConsumo: PdfRow[] = [];
+    tablaConsumo.forEach((fila) => {
+      const filaDatos: PdfRow = [
+        fila.dia,
+        fila.fecha || "",
+        fila.cantidadPollos,
+        fila.consumoIndividualGr === 0 ? "" : fila.consumoIndividualGr,
+        fila.consumoTotalGr,
+        fila.fundas,
+      ];
+      if (Number(fila.dia) % 7 === 1) {
+        filaDatos.unshift({ content: fila.semana, rowSpan: 7 });
+      }
+      bodyConsumo.push(filaDatos);
+    });
+
+    autoTable(doc, {
+      startY: 24,
+      head: [
+        [
+          "Semana",
+          "Día",
+          "Fecha",
+          "Cantidad de Pollos",
+          "Consumo Individual [gr]",
+          "Consumo Total [gr]",
+          "Fundas",
+        ],
+      ],
+      body: bodyConsumo,
+      styles: {
+        fontSize: 8,
+        cellPadding: 2,
+        halign: "center",
+        valign: "middle",
+      },
+      headStyles: { fillColor: [243, 156, 18] },
+      margin: { left: 8, right: 8 },
+    });
+
+    const finalYConsumo = (doc as any).lastAutoTable.finalY + 8;
+    doc.setFontSize(10);
+    doc.text("RESUMEN DE CONSUMO:", margenX, finalYConsumo);
+    doc.text(
+      `Consumo total alimento [gr]: ${getTotalConsumoGrGalpon(sheet)}`,
+      margenX,
+      finalYConsumo + 6,
+    );
+    doc.text(
+      `Total fundas: ${getTotalFundasGalpon(sheet)}`,
+      80,
+      finalYConsumo + 6,
+    );
+  });
+
+  // ESTADISTICAS GENERALES (PDF)
+  doc.addPage("a4", "l");
+  doc.setFontSize(14);
+  doc.text("ESTADÍSTICAS GENERALES", margenX, 12);
+  autoTable(doc, {
+    startY: 20,
+    head: [
+      [
+        "#",
+        "Código Galpón",
+        "Galpón",
+        "Lote",
+        "Cantidad",
+        "Total Alimento",
+        "Total Gas",
+        "Total Mortalidad",
+        "% Mortalidad",
+      ],
+    ],
+    body: resumenGalpones.value.map((item) => [
+      item.numero,
+      item.id,
+      item.galpon,
+      item.lote,
+      item.cantidad,
+      item.alimento,
+      item.gas,
+      item.mortalidad,
+      `${item.porcentaje}%`,
+    ]),
+    styles: { fontSize: 9, halign: "center", valign: "middle" },
+    headStyles: { fillColor: [41, 128, 185] },
+  });
+
+  const y = (doc as any).lastAutoTable.finalY + 8;
+  doc.setFontSize(11);
+  doc.text(
+    `Total galpones: ${estadisticasGenerales.value.totalGalpones}`,
+    margenX,
+    y,
+  );
+  doc.text(
+    `Total pollos ingresados: ${estadisticasGenerales.value.totalCantidad}`,
+    70,
+    y,
+  );
+  doc.text(
+    `Total alimento: ${estadisticasGenerales.value.totalAlimento}`,
+    145,
+    y,
+  );
+  doc.text(`Total gas: ${estadisticasGenerales.value.totalGas}`, 210, y);
+  doc.text(
+    `Total mortalidad: ${estadisticasGenerales.value.totalMortalidad}`,
+    260,
+    y,
+  );
+
+  return doc.output("arraybuffer");
+};
+
+const obtenerMensajeErrorLimpio = (error: unknown) => {
+  let mensaje = String(
+    (error as { message?: string })?.message || error || "",
+  ).trim();
+
+  // Si viene algo como:
+  // "failed to open file at path: ... with error: El proceso no tiene acceso..."
+  const match = mensaje.match(/with error:\s*(.+)$/i);
+  if (match?.[1]) {
+    mensaje = match[1].trim();
+  }
+
+  // Quitar: (os error 32), (os error 5), etc.
+  mensaje = mensaje.replace(/\s*\(os error \d+\)\s*$/i, "").trim();
+
+  return mensaje || "Ocurrió un error inesperado.";
+};
+
+const exportarDatos = async (tipo: "pdf" | "excel" | "ambas") => {
+  if (exportando.value || galpones.value.length === 0) return;
+  try {
+    exportando.value = true;
+    const nombreBase = sanitizarNombreArchivo(
+      `${galpones.value[0]?.nombre_conjunto || "lote"}_${galpones.value[0]?.codigo_conjunto || ""}`,
+    );
+    let buffer: ArrayBuffer | Uint8Array | null = null;
+    let extension = "";
+
+    if (tipo === "pdf") {
+      extension = "pdf";
+      buffer = await crearPdfBuffer();
+    } else if (tipo === "excel") {
+      extension = "xlsx";
+      buffer = await crearExcelBuffer();
+    } else if (tipo === "ambas") {
+      extension = "zip";
+      const [pdfBuffer, excelBuffer] = await Promise.all([
+        crearPdfBuffer(),
+        crearExcelBuffer(),
+      ]);
+      const zip = new JSZip();
+      zip.file(`${nombreBase}.pdf`, pdfBuffer);
+      zip.file(`${nombreBase}.xlsx`, excelBuffer);
+      buffer = await zip.generateAsync({ type: "arraybuffer" });
+    }
+
+    exportando.value = false;
+    cerrarExportacion();
+
+    const rutaDestino = await save({
+      defaultPath: `${nombreBase}.${extension}`,
+      filters: [{ name: tipo.toUpperCase(), extensions: [extension] }],
+    });
+    if (!rutaDestino) return;
+
+    if (!buffer) {
+      throw new Error("No se pudo generar el archivo a exportar.");
+    }
+
+    const dataToWrite =
+      buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+
+    await writeFile(rutaDestino, dataToWrite);
+
+    // AQUÍ ES DONDE LLAMAMOS A TU MODAL EXACTO
+    abrirConfirmacion(
+      "Exportación exitosa",
+      `El archivo se guardó correctamente en:\n${rutaDestino}\n\n¿Deseas abrir la ubicación del archivo?`,
+      async () => {
+        try {
+          await revealItemInDir(rutaDestino);
+        } catch (err) {
+          console.error("Error al abrir la carpeta:", err);
+          mostrarMensaje("Error", "No se pudo abrir la ubicación del archivo.");
+        }
+      },
+      "Abrir ubicación",
+      "success",
+    );
+  } catch (error) {
+    console.error("Error al exportar:", error);
+    exportando.value = false;
+    cerrarExportacion();
+    mostrarMensaje("Error al exportar", obtenerMensajeErrorLimpio(error));
+  } finally {
+    exportando.value = false;
+  }
+};
+
+// --- LÓGICA PARA LA TABLA DE CONSUMO EN ADMIN ---
+const vistaGalpon = ref<"control" | "consumo">("control");
+
+const unidadConsumo = ref<"gr" | "kg">("gr");
+
+const cambiarUnidadConsumo = () => {
+  unidadConsumo.value = unidadConsumo.value === "gr" ? "kg" : "gr";
+};
+
+const etiquetaUnidadConsumo = () => {
+  return unidadConsumo.value === "kg" ? "kg" : "gr";
+};
+
+const formatearConsumo = (valor: number | string | null | undefined) => {
+  const numero = Number(valor) || 0;
+
+  if (unidadConsumo.value === "kg") {
+    const enKg = numero / 1000;
+
+    return enKg.toLocaleString("es-EC", {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 3,
+    });
+  }
+
+  return numero.toLocaleString("es-EC", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  });
+};
+
+const formatearConsumoTotal = (valor: number | string | null | undefined) => {
+  const numero = Number(valor) || 0;
+
+  if (unidadConsumo.value === "kg") {
+    const enKg = numero / 1000;
+
+    return enKg.toLocaleString("es-EC", {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 2,
+    });
+  }
+
+  return numero.toLocaleString("es-EC", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  });
+};
+
+const GRAMOS_POR_FUNDA = 45000;
+const USAR_MORTALIDAD_EN_CONSUMO = false;
+
+const irATablaConsumo = () => {
+  vistaGalpon.value = "consumo";
+};
+
+const volverATablaControl = () => {
+  vistaGalpon.value = "control";
+};
+
+// Reiniciar a la vista de control cada vez que cambies de galpón (pestaña)
+watch(activeTab, () => {
+  vistaGalpon.value = "control";
+});
+
+// Cálculos dinámicos de la tabla de consumo
+const tablaConsumoActual = computed(() => {
+  if (activeTab.value === "stats" || !currentGalpon.value) return [];
+
+  const cantidadInicial = currentGalpon.value.cantidad || 0;
+
+  return currentGalpon.value.filas.map((fila) => {
+    let cantidadPollos = cantidadInicial;
+
+    if (USAR_MORTALIDAD_EN_CONSUMO) {
+      cantidadPollos = Math.max(0, cantidadInicial - (fila.mort_acum || 0));
+    }
+
+    const consumoIndividualGr = fila.alimento_diario || 0;
+    const consumoTotalGr = cantidadPollos * consumoIndividualGr;
+    const fundas = consumoTotalGr
+      ? Math.round(consumoTotalGr / GRAMOS_POR_FUNDA)
+      : 0;
+
+    return {
+      semana: fila.semana,
+      dia: fila.dia,
+      fecha: fila.fecha || "—",
+      cantidadPollos,
+      consumoIndividualGr,
+      consumoTotalGr,
+      fundas,
+    };
+  });
+});
+
+const totalConsumoGrActual = computed(() => {
+  return tablaConsumoActual.value.reduce(
+    (acc, fila) => acc + fila.consumoTotalGr,
+    0,
+  );
+});
+
+const totalFundasActual = computed(() => {
+  return tablaConsumoActual.value.reduce((acc, fila) => acc + fila.fundas, 0);
+});
 </script>
 
 <template>
@@ -610,7 +1555,7 @@ const conjuntosFiltrados = computed(() => {
           :class="{ active: seccionSidebarActiva === 'conjuntos' }"
           @click="cambiarSeccion('conjuntos')"
         >
-          Conjuntos
+          Lotes
         </button>
 
         <button class="sidebar-btn" @click="cerrarSesion">Cerrar sesión</button>
@@ -682,11 +1627,30 @@ const conjuntosFiltrados = computed(() => {
                 >
                   ← Regresar
                 </button>
+
                 <h3>
                   {{ seccionActiva === "detalle" ? "" : "Resultados" }}
                 </h3>
               </div>
-              <span>{{ galpones.length }} galpón(es) encontrado(s)</span>
+
+              <div
+                style="
+                  display: flex;
+                  flex-direction: column;
+                  gap: 6px;
+                  align-items: flex-end;
+                "
+              >
+                <span>{{ galpones.length }} galpón(es) encontrado(s)</span>
+
+                <button
+                  v-if="seccionActiva === 'detalle' && galpones.length > 0"
+                  class="btn-primary btn-sm"
+                  @click="abrirExportacion"
+                >
+                  Exportar
+                </button>
+              </div>
             </div>
 
             <div v-if="galpones.length > 0" class="resultados-inner">
@@ -757,9 +1721,9 @@ const conjuntosFiltrados = computed(() => {
                   </div>
                 </div>
 
-                <div class="info-grid">
+                <div v-show="vistaGalpon === 'control'" class="info-grid">
                   <div class="field">
-                    <label>Nombre del conjunto:</label>
+                    <label>Nombre del lote:</label>
                     <input
                       class="readonly"
                       readonly
@@ -831,7 +1795,7 @@ const conjuntosFiltrados = computed(() => {
                   </div>
                 </div>
 
-                <div class="table-wrapper">
+                <div v-show="vistaGalpon === 'control'" class="table-wrapper">
                   <table class="control-table">
                     <thead>
                       <tr>
@@ -945,24 +1909,205 @@ const conjuntosFiltrados = computed(() => {
                   </table>
                 </div>
 
-                <div class="summary">
-                  <div class="summary-left">
-                    <p>
-                      <strong>Kilos alimento consumidos:</strong>
-                      {{ currentGalpon.totalAlimento }}
-                    </p>
-                    <p>
-                      <strong>Consumo total de gas:</strong>
-                      {{ currentGalpon.totalGas }}
-                    </p>
-                    <p>
-                      <strong>Mortalidad total:</strong>
-                      {{ currentGalpon.totalMortalidad }}
-                    </p>
-                    <p>
-                      <strong>Mortalidad %:</strong>
-                      {{ currentGalpon.porcentajeMortalidad }}%
-                    </p>
+                <div
+                  v-show="vistaGalpon === 'control'"
+                  class="view-nav-actions"
+                  style="margin-top: 14px; text-align: right"
+                >
+                  <button
+                    type="button"
+                    class="btn-primary"
+                    @click="irATablaConsumo"
+                  >
+                    Siguiente: Tabla de consumo
+                  </button>
+                </div>
+
+                <div
+                  v-if="vistaGalpon === 'consumo'"
+                  class="food-table-section"
+                >
+                  <div class="food-table-header">
+                    <div class="food-table-header-left">
+                      <h3>Tabla de consumo de alimento</h3>
+
+                      <div class="unit-switcher">
+                        <span class="unit-label">Unidad:</span>
+                        <button
+                          type="button"
+                          class="unit-btn"
+                          @click="cambiarUnidadConsumo"
+                        >
+                          {{ etiquetaUnidadConsumo() }}
+                        </button>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      class="btn-secondary"
+                      @click="volverATablaControl"
+                    >
+                      ← Anterior: Tabla del galpón
+                    </button>
+                  </div>
+
+                  <div
+                    class="table-wrapper food-table-wrapper food-table-wrapper--fit"
+                  >
+                    <table class="control-table food-table">
+                      <thead>
+                        <tr>
+                          <th>Semana</th>
+                          <th>Día</th>
+                          <th>Fecha</th>
+                          <th>Cantidad de Pollos</th>
+                          <th>
+                            Consumo Individual [{{ etiquetaUnidadConsumo() }}]
+                          </th>
+                          <th>Consumo Total [{{ etiquetaUnidadConsumo() }}]</th>
+                          <th>Fundas</th>
+                        </tr>
+                      </thead>
+
+                      <tbody>
+                        <tr
+                          v-for="(fila, index) in tablaConsumoActual"
+                          :key="`consumo-admin-${currentGalpon?.id || 'galpon'}-${fila.dia}-${index}`"
+                        >
+                          <td
+                            v-if="fila.dia % 7 === 1"
+                            :rowspan="7"
+                            style="vertical-align: middle"
+                          >
+                            <div class="cell-content readonly-cell">
+                              <div
+                                class="cell-display"
+                                style="justify-content: center"
+                              >
+                                {{ fila.semana }}
+                              </div>
+                            </div>
+                          </td>
+
+                          <td>
+                            <div
+                              class="cell-content readonly-cell"
+                              style="justify-content: center"
+                            >
+                              <div
+                                class="cell-display"
+                                style="justify-content: center"
+                              >
+                                {{ fila.dia }}
+                              </div>
+                            </div>
+                          </td>
+
+                          <td>
+                            <div
+                              class="cell-content readonly-cell"
+                              style="justify-content: center"
+                            >
+                              <div
+                                class="cell-display"
+                                style="justify-content: center"
+                              >
+                                {{ fila.fecha }}
+                              </div>
+                            </div>
+                          </td>
+
+                          <td>
+                            <div
+                              class="cell-content readonly-cell"
+                              style="justify-content: center"
+                            >
+                              <div
+                                class="cell-display"
+                                style="justify-content: center"
+                              >
+                                {{ fila.cantidadPollos }}
+                              </div>
+                            </div>
+                          </td>
+
+                          <td>
+                            <div
+                              class="cell-content readonly-cell"
+                              style="justify-content: center"
+                            >
+                              <div
+                                class="cell-display"
+                                style="justify-content: center"
+                              >
+                                {{ formatearConsumo(fila.consumoIndividualGr) }}
+                              </div>
+                            </div>
+                          </td>
+
+                          <td>
+                            <div
+                              class="cell-content readonly-cell"
+                              style="justify-content: center"
+                            >
+                              <div
+                                class="cell-display"
+                                style="justify-content: center"
+                              >
+                                {{ formatearConsumoTotal(fila.consumoTotalGr) }}
+                              </div>
+                            </div>
+                          </td>
+
+                          <td>
+                            <div
+                              class="cell-content readonly-cell"
+                              style="justify-content: center"
+                            >
+                              <div
+                                class="cell-display"
+                                style="justify-content: center"
+                              >
+                                {{ fila.fundas }}
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div class="summary" style="margin-top: 16px">
+                    <div class="summary-left">
+                      <p>
+                        <strong>Total consumo individual acumulado:</strong>
+                        {{ currentGalpon.totalAlimento }}
+                      </p>
+                      <p>
+                        <strong>Consumo total de gas:</strong>
+                        {{ currentGalpon.totalGas }}
+                      </p>
+                      <p>
+                        <strong>Mortalidad total:</strong>
+                        {{ currentGalpon.totalMortalidad }}
+                      </p>
+                      <p>
+                        <strong>Mortalidad %:</strong>
+                        {{ currentGalpon.porcentajeMortalidad }}%
+                      </p>
+                      <p>
+                        <strong
+                          >Consumo total alimento [{{
+                            etiquetaUnidadConsumo()
+                          }}]:</strong
+                        >
+                        {{ formatearConsumoTotal(totalConsumoGrActual) }}
+                      </p>
+                      <p>
+                        <strong>Total fundas:</strong> {{ totalFundasActual }}
+                      </p>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1095,8 +2240,8 @@ const conjuntosFiltrados = computed(() => {
                     <th>Fecha ingreso</th>
                     <th>Procedencia</th>
                     <th>Cantidad</th>
-                    <th>Código conjunto</th>
-                    <th>Nombre conjunto</th>
+                    <th>Código lote</th>
+                    <th>Nombre lote</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1134,8 +2279,8 @@ const conjuntosFiltrados = computed(() => {
 
         <template v-else-if="seccionActiva === 'conjuntos'">
           <div class="dashboard-header">
-            <h1>Conjuntos</h1>
-            <p>Aquí aparecen todos los conjuntos registrados.</p>
+            <h1>Lotes</h1>
+            <p>Aquí aparecen todos los lotes registrados.</p>
           </div>
 
           <div class="listado-box">
@@ -1152,7 +2297,7 @@ const conjuntosFiltrados = computed(() => {
             </div>
 
             <div v-if="cargandoConjuntos" class="sin-resultados">
-              Cargando conjuntos...
+              Cargando lotes...
             </div>
 
             <div v-else class="table-wrapper">
@@ -1186,7 +2331,7 @@ const conjuntosFiltrados = computed(() => {
 
                   <tr v-if="!conjuntosFiltrados.length">
                     <td colspan="6" class="empty-cell">
-                      No se encontraron conjuntos.
+                      No se encontraron lotes.
                     </td>
                   </tr>
                 </tbody>
@@ -1195,6 +2340,86 @@ const conjuntosFiltrados = computed(() => {
           </div>
         </template>
       </main>
+    </div>
+  </div>
+  <div v-if="modalExportacion.visible" class="modal-overlay">
+    <div class="modal-box" style="position: relative">
+      <h3>Exportar datos</h3>
+      <p v-if="!exportando">
+        Escoge el formato en el que deseas exportar la información de todos los
+        galpones de la búsqueda actual.
+      </p>
+      <p v-else>Se está generando el archivo, espera un momento...</p>
+
+      <div class="modal-actions" style="flex-wrap: wrap; gap: 10px">
+        <button
+          class="btn-primary"
+          :disabled="exportando"
+          @click="exportarDatos('pdf')"
+        >
+          {{ exportando ? "Exportando..." : "PDF" }}
+        </button>
+
+        <button
+          class="btn-primary"
+          :disabled="exportando"
+          @click="exportarDatos('excel')"
+        >
+          {{ exportando ? "Exportando..." : "Excel" }}
+        </button>
+
+        <button
+          class="btn-primary"
+          :disabled="exportando"
+          @click="exportarDatos('ambas')"
+        >
+          {{ exportando ? "Exportando..." : "PDF + Excel (ZIP)" }}
+        </button>
+
+        <button
+          class="btn-secondary"
+          :disabled="exportando"
+          @click="cerrarExportacion"
+        >
+          Cancelar
+        </button>
+      </div>
+
+      <div v-if="exportando" class="export-loading-overlay">
+        <div class="export-loading-box">
+          <div class="export-spinner"></div>
+          <p>Exportando archivo...</p>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div v-if="modalMensaje.visible" class="modal-overlay">
+    <div class="modal-box">
+      <h3>{{ modalMensaje.titulo }}</h3>
+      <p>{{ modalMensaje.texto }}</p>
+      <div class="modal-actions">
+        <button class="btn-primary" @click="cerrarMensaje">Aceptar</button>
+      </div>
+    </div>
+  </div>
+
+  <div v-if="modalConfirmacion.visible" class="modal-overlay">
+    <div class="modal-box">
+      <h3>{{ modalConfirmacion.titulo }}</h3>
+      <p style="white-space: pre-line">{{ modalConfirmacion.texto }}</p>
+      <div class="modal-actions">
+        <button class="btn-secondary" @click="cerrarConfirmacion">
+          Cancelar
+        </button>
+        <button
+          :class="[
+            modalConfirmacion.tipo === 'danger' ? 'btn-danger' : 'btn-primary',
+          ]"
+          @click="confirmarAccion"
+        >
+          {{ modalConfirmacion.textoConfirmar }}
+        </button>
+      </div>
     </div>
   </div>
 </template>
@@ -1823,5 +3048,134 @@ const conjuntosFiltrados = computed(() => {
 
 .align-bottom {
   align-self: flex-end;
+}
+.control-table.food-table {
+  min-width: 700px; /* o 600px si quieres más compacta */
+}
+
+.export-loading-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.78);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  z-index: 20;
+}
+
+.export-loading-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  font-weight: 700;
+  color: #222;
+}
+
+.export-spinner {
+  width: 34px;
+  height: 34px;
+  border: 4px solid #d9d9d9;
+  border-top: 4px solid #111;
+  border-radius: 50%;
+  animation: girar-export 0.8s linear infinite;
+}
+
+@keyframes girar-export {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* --- ESTILOS DEL MODAL --- */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  padding: 16px;
+}
+
+.modal-box {
+  width: 100%;
+  max-width: 440px;
+  background: #fff;
+  border-radius: 16px;
+  padding: 24px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
+  position: relative;
+}
+
+.modal-box h3 {
+  margin: 0 0 12px;
+  font-size: 20px;
+  font-weight: 700;
+  color: #111827;
+}
+
+.modal-box p {
+  margin: 0;
+  color: #4b5563;
+  line-height: 1.5;
+  margin-bottom: 15px;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.food-table-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+.food-table-header-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.food-table-header-left h3 {
+  margin: 0;
+}
+
+.unit-switcher {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.unit-label {
+  font-size: 14px;
+  font-weight: 700;
+  color: #374151;
+}
+
+.unit-btn {
+  min-width: 60px;
+  padding: 8px 12px;
+  border: 1px solid #111;
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.unit-btn:hover {
+  background: #f3f4f6;
 }
 </style>

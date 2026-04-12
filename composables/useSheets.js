@@ -95,6 +95,7 @@ export function useSheets() {
     onConfirm: null,
     textoConfirmar: "Aceptar",
     tipo: "normal",
+    mostrarEstadoGuardado: false,
   });
 
   const abrirConfirmacion = (
@@ -103,6 +104,7 @@ export function useSheets() {
     onConfirm,
     textoConfirmar = "Aceptar",
     tipo = "normal",
+    mostrarEstadoGuardado = false,
   ) => {
     modalConfirmacion.value = {
       visible: true,
@@ -111,6 +113,7 @@ export function useSheets() {
       onConfirm,
       textoConfirmar,
       tipo,
+      mostrarEstadoGuardado,
     };
   };
 
@@ -127,6 +130,9 @@ export function useSheets() {
       titulo: "",
       texto: "",
       onConfirm: null,
+      textoConfirmar: "Aceptar",
+      tipo: "normal",
+      mostrarEstadoGuardado: false,
     };
   };
 
@@ -179,7 +185,10 @@ export function useSheets() {
   };
 
   const MAX_SHEETS = 6;
-  const TOTAL_DIAS = 70;
+  const TOTAL_DIAS = 56;
+
+  const GRAMOS_POR_FUNDA = 45000;
+  const USAR_MORTALIDAD_EN_CONSUMO = false;
 
   const crearIdLote = (numero = 1) => {
     const fecha = new Date();
@@ -275,6 +284,7 @@ export function useSheets() {
 
   const sheets = ref([crearSheetVacia(1)]);
   const activeTab = ref(0);
+  const selectedTabs = ref([0]); // 👈 NUEVA VARIABLE PARA SELECCIÓN MÚLTIPLE
 
   const contextMenu = ref({
     visible: false,
@@ -301,9 +311,79 @@ export function useSheets() {
   const editingCell = ref(null);
   const ventanaPerdioFoco = ref(false);
   const tablaExpandida = ref(false);
+  const tableWrapperRef = ref(null);
+
+  let fillAutoScrollFrame = null;
+  let fillScrollDirection = 0; // -1 arriba, 1 abajo, 0 detenido
 
   const toggleTablaExpandida = () => {
     tablaExpandida.value = !tablaExpandida.value;
+  };
+
+  const setTableWrapperRef = (wrapperRef) => {
+    tableWrapperRef.value = wrapperRef?.value || null;
+  };
+
+  const iniciarAutoScrollFill = () => {
+    if (fillAutoScrollFrame !== null) return;
+
+    const step = () => {
+      const wrapper = tableWrapperRef.value;
+
+      if (wrapper && fillScrollDirection !== 0) {
+        wrapper.scrollTop += fillScrollDirection * 10;
+      }
+
+      fillAutoScrollFrame = requestAnimationFrame(step);
+    };
+
+    fillAutoScrollFrame = requestAnimationFrame(step);
+  };
+
+  const detenerAutoScrollFill = () => {
+    fillScrollDirection = 0;
+
+    if (fillAutoScrollFrame !== null) {
+      cancelAnimationFrame(fillAutoScrollFrame);
+      fillAutoScrollFrame = null;
+    }
+  };
+
+  const handleMouseMoveGlobal = (event) => {
+    if (!fillEstado.value.arrastrando) return;
+
+    actualizarAutoScrollFill(event);
+  };
+
+  const actualizarAutoScrollFill = (event) => {
+    const wrapper = tableWrapperRef.value;
+    if (!wrapper) return;
+
+    const rect = wrapper.getBoundingClientRect();
+
+    const margen = 50; // zona sensible
+    const velocidadMax = 25;
+
+    let velocidad = 0;
+
+    // 🔼 SCROLL HACIA ARRIBA (MEJORADO)
+    if (event.clientY < rect.top + margen) {
+      const distancia = rect.top + margen - event.clientY;
+      velocidad = -Math.min(velocidadMax, distancia);
+    }
+
+    // 🔽 SCROLL HACIA ABAJO
+    else if (event.clientY > rect.bottom - margen) {
+      const distancia = event.clientY - (rect.bottom - margen);
+      velocidad = Math.min(velocidadMax, distancia);
+    }
+
+    if (velocidad !== 0) {
+      fillScrollDirection = velocidad / 10; // suaviza
+      iniciarAutoScrollFill();
+    } else {
+      detenerAutoScrollFill();
+    }
   };
 
   const marcarBlurVentana = () => {
@@ -410,10 +490,8 @@ export function useSheets() {
       for (let c = rangoOrigen.minCol; c <= rangoOrigen.maxCol; c++) {
         const valor = obtenerValorActualCelda(sheet, f, c);
 
-        const key = `${f}-${c}`;
-        const formato = cellFormats.value[key]
-          ? { ...cellFormats.value[key] }
-          : { h: "left", v: "middle", wrap: false };
+        //  ESTO ES LO ÚNICO QUE CAMBIA
+        const formato = { ...getFormatoCelda(f, c) };
 
         filaDatos.push({
           valor,
@@ -786,6 +864,8 @@ export function useSheets() {
   const handleCellMouseEnter = (event, fila, col) => {
     // CONTROL DEL ARRASTRE DEL CUADRITO (FILL)
     if (fillEstado.value.arrastrando && event.buttons === 1) {
+      actualizarAutoScrollFill(event);
+
       const origen = fillEstado.value.origen;
       let destFila = fila;
       let destCol = col;
@@ -809,6 +889,8 @@ export function useSheets() {
   };
 
   const finalizarSeleccionCeldas = () => {
+    detenerAutoScrollFill();
+
     if (
       fillEstado.value.arrastrando &&
       fillEstado.value.origen &&
@@ -994,16 +1076,42 @@ export function useSheets() {
     const nuevoNumero = sheets.value.length + 1;
     sheets.value.push(crearSheetVacia(nuevoNumero));
     activeTab.value = sheets.value.length - 1;
+    selectedTabs.value = [activeTab.value];
   };
 
   const irAEstadisticas = () => {
     cerrarMenuContextual();
     activeTab.value = "stats";
+    selectedTabs.value = [];
   };
 
-  const irASheet = (index) => {
+  const irASheet = (event, index) => {
     cerrarMenuContextual();
-    activeTab.value = index;
+
+    // Si presionamos Ctrl (Windows) o Cmd (Mac)
+    if (event && (event.ctrlKey || event.metaKey)) {
+      if (selectedTabs.value.includes(index)) {
+        // Si ya estaba seleccionado, lo quitamos
+        selectedTabs.value = selectedTabs.value.filter((i) => i !== index);
+
+        // Si quitamos todos, por seguridad volvemos a dejar el actual
+        if (selectedTabs.value.length === 0) {
+          selectedTabs.value = [index];
+          activeTab.value = index;
+        } else if (activeTab.value === index) {
+          // Si quitamos la pestaña que estábamos viendo, mostramos la última del grupo
+          activeTab.value = selectedTabs.value[selectedTabs.value.length - 1];
+        }
+      } else {
+        // Agregamos a la selección múltiple
+        selectedTabs.value.push(index);
+        activeTab.value = index; // Mostramos esta nueva en pantalla
+      }
+    } else {
+      // Clic normal: limpiamos el grupo y seleccionamos solo esta
+      selectedTabs.value = [index];
+      activeTab.value = index;
+    }
   };
 
   const abrirMenuContextual = (event, index) => {
@@ -1014,6 +1122,13 @@ export function useSheets() {
 
     event.preventDefault();
 
+    // 👈 NUEVO: Si damos clic derecho en una pestaña que NO está en nuestro grupo
+    // limpiamos el grupo y seleccionamos solo esa.
+    if (!selectedTabs.value.includes(index)) {
+      selectedTabs.value = [index];
+      activeTab.value = index;
+    }
+
     contextMenu.value = {
       visible: true,
       x: event.clientX,
@@ -1022,44 +1137,50 @@ export function useSheets() {
     };
   };
 
-  const cerrarMenuContextual = () => {
-    contextMenu.value.visible = false;
-    contextMenu.value.index = null;
-  };
-
   const eliminarSheet = () => {
     const index = contextMenu.value.index;
-
     if (index === null || index === undefined) return;
 
-    if (sheets.value.length === 1) {
-      mostrarMensaje("No permitido", "Debe existir al menos una hoja.");
+    // Tomamos todos los que están seleccionados
+    let toDelete = [...selectedTabs.value];
+
+    // Validar que no dejemos el sistema sin hojas
+    if (sheets.value.length === toDelete.length) {
+      mostrarMensaje("No permitido", "Debe existir al menos un galpón/hoja.");
       cerrarMenuContextual();
       return;
     }
 
-    const sheet = sheets.value[index];
+    const isMultiple = toDelete.length > 1;
+    // Extraemos los nombres para la confirmación
+    const sheetNames = toDelete.map((i) => sheets.value[i].nombre).join(", ");
 
     abrirConfirmacion(
-      "Eliminar hoja",
-      `¿Seguro que deseas eliminar la hoja "${sheet.nombre}"?\nID: ${sheet.id}`,
+      isMultiple ? "Eliminar hojas" : "Eliminar hoja",
+      isMultiple
+        ? `¿Seguro que deseas eliminar las ${toDelete.length} hojas seleccionadas?\n(${sheetNames})`
+        : `¿Seguro que deseas eliminar la hoja "${sheets.value[index].nombre}"?\nID: ${sheets.value[index].id}`,
       () => {
-        sheets.value.splice(index, 1);
+        // Filtramos para quedarnos con las hojas que NO están en la lista de borrado
+        sheets.value = sheets.value.filter((_, i) => !toDelete.includes(i));
         renombrarSheets();
 
+        // Reseteamos qué hoja ver y nuestra selección
         if (activeTab.value === "stats") {
-        } else if (activeTab.value === index) {
-          activeTab.value = Math.min(index, sheets.value.length - 1);
-        } else if (
-          typeof activeTab.value === "number" &&
-          activeTab.value > index
-        ) {
-          activeTab.value -= 1;
+          selectedTabs.value = [];
+        } else {
+          activeTab.value = Math.max(0, sheets.value.length - 1);
+          selectedTabs.value = [activeTab.value];
         }
 
         cerrarMenuContextual();
       },
     );
+  };
+
+  const cerrarMenuContextual = () => {
+    contextMenu.value.visible = false;
+    contextMenu.value.index = null;
   };
 
   const handleInputFocus = (fila, col) => {
@@ -1431,6 +1552,87 @@ export function useSheets() {
     }
   };
 
+  const getCantidadPollosParaConsumo = (sheet, fila) => {
+    const cantidadInicial = Number(sheet.form.cantidad) || 0;
+
+    if (!USAR_MORTALIDAD_EN_CONSUMO) {
+      return cantidadInicial;
+    }
+
+    const mortAcum = Number(fila.mortAcum) || 0;
+    return Math.max(0, cantidadInicial - mortAcum);
+  };
+
+  // 1. Pegamos tus valores fijos aquí para que el composable los conozca
+  const valoresConsumoFijos = [
+    11, 14, 18, 21, 27, 30, 33, 35, 38, 42, 46, 50, 54, 58, 62, 69, 75, 78, 86,
+    93, 99, 106, 114, 120, 127, 130, 134, 138, 140, 143, 144, 145, 147, 148,
+    150, 155, 160, 170, 180, 185, 191, 197, 200, 210, 215, 218, 221, 224, 228,
+    230, 234,
+  ];
+
+  // 2. Reemplazamos la función original por tu función inteligente
+  const getConsumoIndividualGr = (fila) => {
+    if (
+      fila.alimentoDiario !== undefined &&
+      fila.alimentoDiario !== null &&
+      fila.alimentoDiario !== ""
+    ) {
+      return Number(fila.alimentoDiario);
+    }
+
+    const indiceDia = (fila.dia || 1) - 1;
+    return valoresConsumoFijos[indiceDia] || 0;
+  };
+
+  const getConsumoTotalGrFila = (sheet, fila) => {
+    const cantidadPollos = getCantidadPollosParaConsumo(sheet, fila);
+    const consumoIndividualGr = getConsumoIndividualGr(fila);
+
+    return cantidadPollos * consumoIndividualGr;
+  };
+
+  const getFundasFila = (sheet, fila) => {
+    const consumoTotalGr = getConsumoTotalGrFila(sheet, fila);
+
+    if (!consumoTotalGr) return 0;
+
+    return Math.round(consumoTotalGr / GRAMOS_POR_FUNDA);
+  };
+
+  const getTablaConsumoSheet = (sheet) => {
+    return sheet.filas.map((fila) => {
+      const cantidadPollos = getCantidadPollosParaConsumo(sheet, fila);
+      const consumoIndividualGr = getConsumoIndividualGr(fila);
+      const consumoTotalGr = getConsumoTotalGrFila(sheet, fila);
+      const fundas = getFundasFila(sheet, fila);
+
+      return {
+        dia: fila.dia,
+        semana: fila.semana,
+        fecha: fila.fecha || "",
+        cantidadPollos,
+        consumoIndividualGr,
+        consumoTotalGr,
+        fundas,
+      };
+    });
+  };
+
+  const getTotalConsumoGrSheet = (sheet) => {
+    return getTablaConsumoSheet(sheet).reduce(
+      (acc, fila) => acc + fila.consumoTotalGr,
+      0,
+    );
+  };
+
+  const getTotalFundasSheet = (sheet) => {
+    return getTablaConsumoSheet(sheet).reduce(
+      (acc, fila) => acc + fila.fundas,
+      0,
+    );
+  };
+
   const crearExcelBuffer = async () => {
     recalcularTodasLasHojas();
 
@@ -1440,9 +1642,11 @@ export function useSheets() {
     workbook.calcProperties.fullCalcOnLoad = true;
 
     sheets.value.forEach((sheet, index) => {
-      const ws = workbook.addWorksheet(
-        sanitizarNombreHojaExcel(sheet.nombre || `Galpon ${index + 1}`),
-      );
+      // =========================================================
+      // 1. CREACIÓN DE LA HOJA DEL GALPÓN
+      // =========================================================
+      const nombreGalpon = sheet.nombre || `Galpon ${index + 1}`;
+      const ws = workbook.addWorksheet(sanitizarNombreHojaExcel(nombreGalpon));
 
       const cantidadInicial = Number(sheet.form.cantidad) || 0;
 
@@ -1469,7 +1673,7 @@ export function useSheets() {
 
       ws.mergeCells("A2:M2");
       ws.getCell("A2").value =
-        `Conjunto: ${conjunto.value.nombre || ""} | Código Conjunto: ${conjunto.value.id || ""}`;
+        `Lote: ${conjunto.value.nombre || ""} | Código Lote: ${conjunto.value.id || ""}`;
       ws.getCell("A2").alignment = { horizontal: "center" };
 
       ws.getCell("A4").value = "Código Galpón:";
@@ -1563,11 +1767,28 @@ export function useSheets() {
 
         for (let col = 1; col <= 13; col++) {
           const cell = ws.getRow(excelRow).getCell(col);
+
+          let alignH = "center";
+          let alignV = "middle";
+          let wrap = true;
+
+          // Excel empieza en columna 1 y las 2 primeras son Semana y Día.
+          // Restamos 3 para sincronizar con nuestro índice de columnas de la UI (0 a 10)
+          const uiColIndex = col - 3;
+
+          if (uiColIndex >= 0 && uiColIndex <= 10) {
+            const formato = getFormatoCelda(i, uiColIndex);
+            alignH = formato.h;
+            alignV = formato.v;
+            wrap = formato.wrap;
+          }
+
           cell.alignment = {
-            horizontal: col === 7 || col === 13 ? "left" : "center",
-            vertical: "middle",
-            wrapText: true,
+            horizontal: alignH,
+            vertical: alignV,
+            wrapText: wrap,
           };
+
           cell.border = {
             top: { style: "thin" },
             left: { style: "thin" },
@@ -1617,8 +1838,147 @@ export function useSheets() {
       ws.getCell(`B${resumenRow + 4}`).numFmt = "0.00";
 
       ws.views = [{ state: "frozen", ySplit: 7 }];
+
+      // =========================================================
+      // 2. CREACIÓN DE LA HOJA DE CONSUMO PARA ESTE GALPÓN (CON FÓRMULAS)
+      // =========================================================
+      const wsConsumo = workbook.addWorksheet(
+        sanitizarNombreHojaExcel(`Consumo ${nombreGalpon}`),
+      );
+
+      wsConsumo.columns = [
+        { key: "semana", width: 12 },
+        { key: "dia", width: 10 },
+        { key: "fecha", width: 16 },
+        { key: "cantidadPollos", width: 22 },
+        { key: "consumoIndividual", width: 24 },
+        { key: "consumoTotal", width: 20 },
+        { key: "fundas", width: 15 },
+      ];
+
+      wsConsumo.mergeCells("A1:G1");
+      wsConsumo.getCell("A1").value =
+        `TABLA DE CONSUMO DE ALIMENTO - ${nombreGalpon.toUpperCase()}`;
+      wsConsumo.getCell("A1").font = { bold: true, size: 14 };
+      wsConsumo.getCell("A1").alignment = {
+        horizontal: "center",
+        vertical: "middle",
+      };
+
+      wsConsumo.mergeCells("A2:G2");
+      wsConsumo.getCell("A2").value =
+        `Lote: ${conjunto.value.nombre || ""} | Código Lote: ${conjunto.value.id || ""}`;
+      wsConsumo.getCell("A2").alignment = { horizontal: "center" };
+
+      const headerRowConsumo = 4;
+      const headersConsumo = [
+        "Semana",
+        "Día",
+        "Fecha",
+        "Cantidad de Pollos",
+        "Consumo Individual [gr]",
+        "Consumo Total [gr]",
+        "Fundas",
+      ];
+
+      wsConsumo.getRow(headerRowConsumo).values = headersConsumo;
+      wsConsumo.getRow(headerRowConsumo).font = { bold: true };
+      wsConsumo.getRow(headerRowConsumo).alignment = {
+        horizontal: "center",
+        vertical: "middle",
+        wrapText: true,
+      };
+
+      wsConsumo.getRow(headerRowConsumo).eachCell((cell) => {
+        cell.fill = {
+          type: "pattern",
+          pattern: "solid",
+          fgColor: { argb: "FFFFE599" }, // Color amarillo pastel para diferenciar
+        };
+        cell.border = {
+          top: { style: "thin" },
+          left: { style: "thin" },
+          bottom: { style: "thin" },
+          right: { style: "thin" },
+        };
+      });
+
+      const tablaConsumo = getTablaConsumoSheet(sheet);
+      const dataStartRowConsumo = 5;
+
+      tablaConsumo.forEach((fila, i) => {
+        const excelRow = dataStartRowConsumo + i;
+
+        wsConsumo.getCell(`A${excelRow}`).value = fila.semana;
+        wsConsumo.getCell(`B${excelRow}`).value = fila.dia;
+        wsConsumo.getCell(`C${excelRow}`).value = fila.fecha || "";
+
+        // Base de datos para el cálculo
+        wsConsumo.getCell(`D${excelRow}`).value = fila.cantidadPollos;
+        wsConsumo.getCell(`E${excelRow}`).value =
+          fila.consumoIndividualGr === 0 ? "" : fila.consumoIndividualGr;
+
+        // Fórmulas de Excel en lugar de datos quemados
+        wsConsumo.getCell(`F${excelRow}`).value = {
+          formula: `IF(E${excelRow}="","",D${excelRow}*E${excelRow})`,
+        };
+
+        // Asumiendo que GRAMOS_POR_FUNDA = 45000, dividimos el Consumo Total para las fundas
+        wsConsumo.getCell(`G${excelRow}`).value = {
+          formula: `IF(F${excelRow}="","",ROUND(F${excelRow}/45000,0))`,
+        };
+
+        for (let col = 1; col <= 7; col++) {
+          const cell = wsConsumo.getRow(excelRow).getCell(col);
+          cell.alignment = { horizontal: "center", vertical: "middle" };
+          cell.border = {
+            top: { style: "thin" },
+            left: { style: "thin" },
+            bottom: { style: "thin" },
+            right: { style: "thin" },
+          };
+        }
+      });
+
+      // Agrupar visualmente las semanas igual que en la tabla principal
+      for (
+        let inicio = dataStartRowConsumo;
+        inicio < dataStartRowConsumo + 70;
+        inicio += 7
+      ) {
+        const fin = Math.min(inicio + 6, dataStartRowConsumo + 69);
+        if (inicio <= fin) {
+          wsConsumo.mergeCells(`A${inicio}:A${fin}`);
+          wsConsumo.getCell(`A${inicio}`).alignment = {
+            horizontal: "center",
+            vertical: "middle",
+          };
+        }
+      }
+
+      const resumenRowConsumo = dataStartRowConsumo + tablaConsumo.length + 2;
+
+      wsConsumo.getCell(`A${resumenRowConsumo}`).value = "RESUMEN";
+      wsConsumo.getCell(`A${resumenRowConsumo}`).font = { bold: true };
+
+      // Fórmulas de suma para el resumen inferior
+      wsConsumo.getCell(`A${resumenRowConsumo + 1}`).value =
+        "Consumo total alimento [gr]:";
+      wsConsumo.getCell(`C${resumenRowConsumo + 1}`).value = {
+        formula: `SUM(F${dataStartRowConsumo}:F${dataStartRowConsumo + tablaConsumo.length - 1})`,
+      };
+
+      wsConsumo.getCell(`A${resumenRowConsumo + 2}`).value = "Total fundas:";
+      wsConsumo.getCell(`C${resumenRowConsumo + 2}`).value = {
+        formula: `SUM(G${dataStartRowConsumo}:G${dataStartRowConsumo + tablaConsumo.length - 1})`,
+      };
+
+      wsConsumo.views = [{ state: "frozen", ySplit: 4 }];
     });
 
+    // =========================================================
+    // 3. HOJA DE ESTADÍSTICAS GENERALES (Al final de todas las hojas)
+    // =========================================================
     const wsStats = workbook.addWorksheet("Estadisticas");
     wsStats.columns = [
       { key: "numero", width: 10 },
@@ -1732,52 +2092,82 @@ export function useSheets() {
     const doc = new jsPDF("l", "mm", "a4");
     const margenX = 10;
 
-    doc.setFontSize(16);
-    doc.text("CONTROL PARA POLLOS DE CARNE", margenX, 12);
-
-    doc.setFontSize(10);
-    doc.text(`Código Conjunto: ${conjunto.value.id || ""}`, margenX, 18);
-    doc.text(
-      `Nombre del conjunto: ${conjunto.value.nombre || ""}`,
-      margenX,
-      23,
-    );
-    doc.text(`Descripción: ${conjunto.value.descripcion || ""}`, margenX, 28);
-
     sheets.value.forEach((sheet, index) => {
+      // =========================================================
+      // 1. PÁGINA DEL GALPÓN
+      // =========================================================
       if (index > 0) doc.addPage("a4", "l");
 
-      doc.setFontSize(14);
-      doc.text(`${sheet.nombre} - ${sheet.id}`, margenX, 12);
+      // --- ENCABEZADO PRINCIPAL ---
+      doc.setFontSize(16);
+      doc.text("CONTROL PARA POLLOS DE CARNE", margenX, 12);
+
+      doc.setFontSize(10);
+      doc.text(
+        `Código Lote: ${conjunto.value.id || ""}   |   Nombre del lote: ${conjunto.value.nombre || ""}`,
+        margenX,
+        18,
+      );
+      doc.text(`Descripción: ${conjunto.value.descripcion || ""}`, margenX, 23);
+
+      doc.setFontSize(12);
+      doc.text(`${sheet.nombre} - ${sheet.id}`, margenX, 29);
 
       doc.setFontSize(9);
-      doc.text(`Granja: ${sheet.form.granja || ""}`, margenX, 18);
-      doc.text(`Lote: ${sheet.form.lote || ""}`, 70, 18);
-      doc.text(`Galpón: ${sheet.form.galpon || ""}`, 120, 18);
-      doc.text(`Fecha ingreso: ${sheet.form.fechaIngreso || ""}`, 170, 18);
-      doc.text(`Procedencia: ${sheet.form.procedencia || ""}`, 230, 18);
-      doc.text(`Cantidad: ${sheet.form.cantidad || 0}`, 280, 18, {
+      doc.text(`Granja: ${sheet.form.granja || ""}`, margenX, 34);
+      doc.text(`Lote: ${sheet.form.lote || ""}`, 70, 34);
+      doc.text(`Galpón: ${sheet.form.galpon || ""}`, 120, 34);
+      doc.text(`Fecha ingreso: ${sheet.form.fechaIngreso || ""}`, 170, 34);
+      doc.text(`Procedencia: ${sheet.form.procedencia || ""}`, 230, 34);
+      doc.text(`Cantidad: ${sheet.form.cantidad || 0}`, 280, 34, {
         align: "right",
       });
 
-      const body = sheet.filas.map((fila) => [
-        fila.semana,
-        fila.dia,
-        fila.fecha || "",
-        fila.alimentoCant || "",
-        fila.alimentoDiario || "",
-        fila.alimentoAcum || "",
-        fila.medicina || "",
-        fila.gasDiario || "",
-        fila.gasAcum || "",
-        fila.mortDiaria || "",
-        fila.mortAcum || "",
-        fila.mortPorcentaje || "",
-        fila.observacion || "",
-      ]);
+      // MODIFICACIÓN: Creamos el body omitiendo la celda Semana en los días 2-7 y agregando estilos
+      const body = [];
+      sheet.filas.forEach((fila, i) => {
+        // Función auxiliar para recuperar el estilo y dárselo al PDF
+        const getPdfCell = (colIndex, valor) => {
+          const formato = getFormatoCelda(i, colIndex);
+          return {
+            content: valor,
+            styles: {
+              halign: formato.h,
+              valign: formato.v,
+            },
+          };
+        };
 
+        const filaDatos = [
+          { content: fila.dia, styles: { halign: "center", valign: "middle" } },
+          getPdfCell(0, fila.fecha || ""),
+          getPdfCell(1, fila.alimentoCant || ""),
+          getPdfCell(2, fila.alimentoDiario || ""),
+          getPdfCell(3, fila.alimentoAcum || ""),
+          getPdfCell(4, fila.medicina || ""),
+          getPdfCell(5, fila.gasDiario || ""),
+          getPdfCell(6, fila.gasAcum || ""),
+          getPdfCell(7, fila.mortDiaria || ""),
+          getPdfCell(8, fila.mortAcum || ""),
+          getPdfCell(9, fila.mortPorcentaje || ""),
+          getPdfCell(10, fila.observacion || ""),
+        ];
+
+        // Solo insertamos la celda de la Semana al inicio del arreglo si es el día 1 de la semana
+        if (Number(fila.dia) % 7 === 1) {
+          filaDatos.unshift({
+            content: fila.semana,
+            rowSpan: 7,
+            styles: { halign: "center", valign: "middle" },
+          });
+        }
+
+        body.push(filaDatos);
+      });
+
+      // --- TABLA DEL GALPÓN ---
       autoTable(doc, {
-        startY: 24,
+        startY: 38,
         head: [
           [
             "Sem",
@@ -1807,8 +2197,8 @@ export function useSheets() {
           fillColor: [52, 73, 94],
         },
         columnStyles: {
-          6: { cellWidth: 28, halign: "left" },
-          12: { cellWidth: 34, halign: "left" },
+          6: { cellWidth: 28 }, // Alineación removida para que domine el estilo dinámico
+          12: { cellWidth: 34 }, // Alineación removida para que domine el estilo dinámico
         },
         margin: { left: 8, right: 8 },
       });
@@ -1832,8 +2222,91 @@ export function useSheets() {
         245,
         finalY,
       );
+
+      // =========================================================
+      // 2. PÁGINA DE TABLA DE CONSUMO PARA ESTE GALPÓN
+      // =========================================================
+      doc.addPage("a4", "l");
+
+      doc.setFontSize(14);
+      doc.text(
+        `TABLA DE CONSUMO DE ALIMENTO - ${sheet.nombre.toUpperCase()}`,
+        margenX,
+        12,
+      );
+
+      doc.setFontSize(9);
+      doc.text(`Código Lote: ${conjunto.value.id || ""}`, margenX, 18);
+      doc.text(`Lote: ${sheet.form.lote || ""}`, 90, 18);
+      doc.text(`Galpón: ${sheet.form.galpon || ""}`, 150, 18);
+
+      const tablaConsumo = getTablaConsumoSheet(sheet);
+
+      // MODIFICACIÓN: Mismo procedimiento de omitir celda para la tabla de Consumo
+      const bodyConsumo = [];
+      tablaConsumo.forEach((fila) => {
+        const filaDatos = [
+          fila.dia,
+          fila.fecha || "",
+          fila.cantidadPollos,
+          fila.consumoIndividualGr === 0 ? "" : fila.consumoIndividualGr,
+          fila.consumoTotalGr,
+          fila.fundas,
+        ];
+
+        // Solo la insertamos al inicio del arreglo si corresponde
+        if (Number(fila.dia) % 7 === 1) {
+          filaDatos.unshift({ content: fila.semana, rowSpan: 7 });
+        }
+
+        bodyConsumo.push(filaDatos);
+      });
+
+      autoTable(doc, {
+        startY: 24,
+        head: [
+          [
+            "Semana",
+            "Día",
+            "Fecha",
+            "Cantidad de Pollos",
+            "Consumo Individual [gr]",
+            "Consumo Total [gr]",
+            "Fundas",
+          ],
+        ],
+        body: bodyConsumo,
+        styles: {
+          fontSize: 8,
+          cellPadding: 2,
+          halign: "center",
+          valign: "middle",
+        },
+        headStyles: {
+          fillColor: [243, 156, 18],
+        },
+        margin: { left: 8, right: 8 },
+      });
+
+      const finalYConsumo = doc.lastAutoTable.finalY + 8;
+
+      doc.setFontSize(10);
+      doc.text("RESUMEN DE CONSUMO:", margenX, finalYConsumo);
+      doc.text(
+        `Consumo total alimento [gr]: ${getTotalConsumoGrSheet(sheet)}`,
+        margenX,
+        finalYConsumo + 6,
+      );
+      doc.text(
+        `Total fundas: ${getTotalFundasSheet(sheet)}`,
+        80,
+        finalYConsumo + 6,
+      );
     });
 
+    // =========================================================
+    // 3. PÁGINA DE ESTADÍSTICAS GENERALES AL FINAL
+    // =========================================================
     doc.addPage("a4", "l");
     doc.setFontSize(14);
     doc.text("ESTADÍSTICAS GENERALES", margenX, 12);
@@ -1900,6 +2373,22 @@ export function useSheets() {
 
     return doc.output("arraybuffer");
   };
+
+  const obtenerMensajeErrorLimpio = (error) => {
+    let mensaje = String(error?.message || error || "").trim();
+
+    // Si viene con "with error:", nos quedamos solo con esa parte
+    const match = mensaje.match(/with error:\s*(.+)$/i);
+    if (match?.[1]) {
+      mensaje = match[1].trim();
+    }
+
+    // Quitar: (os error 32), (os error 5), etc.
+    mensaje = mensaje.replace(/\s*\(os error \d+\)\s*$/i, "").trim();
+
+    return mensaje || "Ocurrió un error inesperado.";
+  };
+
   const exportarDatos = async (tipo) => {
     if (exportando.value) return;
 
@@ -1989,17 +2478,12 @@ export function useSheets() {
     } catch (error) {
       console.error("Error al exportar:", error);
 
-      // 🔥 CORRECCIÓN: Apagar el estado aquí en caso de error
       exportando.value = false;
       cerrarExportacion();
       await nextTick();
 
-      mostrarMensaje(
-        "Error al exportar",
-        `No se pudo completar la exportación.\n\nDetalle: ${error?.message || error}`,
-      );
+      mostrarMensaje("Error al exportar", obtenerMensajeErrorLimpio(error));
     } finally {
-      // Por seguridad
       exportando.value = false;
     }
   };
@@ -2162,6 +2646,18 @@ export function useSheets() {
     currentSheet.value ? getTotalAlimentoSheet(currentSheet.value) : 0,
   );
 
+  const tablaConsumoActual = computed(() =>
+    currentSheet.value ? getTablaConsumoSheet(currentSheet.value) : [],
+  );
+
+  const totalConsumoGrActual = computed(() =>
+    currentSheet.value ? getTotalConsumoGrSheet(currentSheet.value) : 0,
+  );
+
+  const totalFundasActual = computed(() =>
+    currentSheet.value ? getTotalFundasSheet(currentSheet.value) : 0,
+  );
+
   const totalGasActual = computed(() =>
     currentSheet.value ? getTotalGasSheet(currentSheet.value) : 0,
   );
@@ -2193,6 +2689,8 @@ export function useSheets() {
         porcentaje: cantidad
           ? ((mortalidad / cantidad) * 100).toFixed(2)
           : "0.00",
+        consumoTotalGr: getTotalConsumoGrSheet(sheet),
+        fundas: getTotalFundasSheet(sheet),
       };
     }),
   );
@@ -2225,9 +2723,21 @@ export function useSheets() {
       totalAlimento,
       totalGas,
       totalMortalidad,
+      totalConsumoGr,
+      totalFundas,
       porcentajeMortalidad,
     };
   });
+
+  const totalConsumoGr = resumenGalpones.value.reduce(
+    (acc, item) => acc + item.consumoTotalGr,
+    0,
+  );
+
+  const totalFundas = resumenGalpones.value.reduce(
+    (acc, item) => acc + item.fundas,
+    0,
+  );
 
   const handleGlobalClick = (event) => {
     if (contextMenu.value.visible) cerrarMenuContextual();
@@ -2721,6 +3231,7 @@ export function useSheets() {
 
     sheets.value = [crearSheetVacia(1)];
     activeTab.value = 0;
+    selectedTabs.value = [0];
 
     limpiarSeleccion();
     cancelarPortapapeles();
@@ -2738,6 +3249,7 @@ export function useSheets() {
       },
       "Crear",
       "primary", // opcional
+      true,
     );
   };
 
@@ -2753,6 +3265,7 @@ export function useSheets() {
     window.addEventListener("keydown", handleKeyDownGlobal);
     window.addEventListener("mouseup", finalizarSeleccionCeldas);
     window.addEventListener("paste", handlePasteGlobal);
+    window.addEventListener("mousemove", handleMouseMoveGlobal);
   });
 
   // --- NUEVO ESTADO PARA EL TOOLTIP DE REDIMENSIÓN ---
@@ -3043,9 +3556,11 @@ export function useSheets() {
     window.removeEventListener("keydown", handleKeyDownGlobal);
     window.removeEventListener("mouseup", finalizarSeleccionCeldas);
     window.removeEventListener("paste", handlePasteGlobal);
+    window.removeEventListener("mousemove", handleMouseMoveGlobal);
   });
 
   return {
+    selectedTabs,
     esFormatoActivo,
     resetResizeCol,
     resetResizeRow,
@@ -3065,6 +3580,9 @@ export function useSheets() {
     totalGasActual,
     totalMortalidadActual,
     mortalidadPorcentajeFinalActual,
+    tablaConsumoActual,
+    totalConsumoGrActual,
+    totalFundasActual,
     resumenGalpones,
     estadisticasGenerales,
     addSheet,
@@ -3084,6 +3602,9 @@ export function useSheets() {
     calcularGasHasta,
     calcularMortalidadHasta,
     recalcularSheet,
+    getTablaConsumoSheet,
+    getTotalConsumoGrSheet,
+    getTotalFundasSheet,
     onCantidadChange,
     guardar,
     modalMensaje,
@@ -3118,13 +3639,12 @@ export function useSheets() {
     handleCellDoubleClick,
     tablaExpandida,
     toggleTablaExpandida,
-
     modalExportacion,
     abrirExportacion,
     cerrarExportacion,
     exportarDatos,
     exportando,
-
     estadoGuardado,
+    setTableWrapperRef,
   };
 }

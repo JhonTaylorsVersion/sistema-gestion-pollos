@@ -1,5 +1,5 @@
 <script setup>
-import { ref } from "vue";
+import { ref, onMounted, watch } from "vue";
 import { useSheets } from "../composables/useSheets";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 
@@ -29,7 +29,81 @@ const handleConfigClick = async () => {
   });
 };
 
+const vistaGalpon = ref("control"); // "control" | "consumo"
+const tableWrapperRef = ref(null);
+
+const unidadConsumo = ref("gr"); // "gr" | "kg"
+
+const cambiarUnidadConsumo = () => {
+  unidadConsumo.value = unidadConsumo.value === "gr" ? "kg" : "gr";
+};
+
+const formatearConsumo = (valor) => {
+  const numero = Number(valor) || 0;
+
+  if (unidadConsumo.value === "kg") {
+    const enKg = numero / 1000;
+
+    return enKg.toLocaleString("es-EC", {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 3,
+    });
+  }
+
+  return numero.toLocaleString("es-EC", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  });
+};
+
+const formatearConsumoTotal = (valor) => {
+  const numero = Number(valor) || 0;
+
+  if (unidadConsumo.value === "kg") {
+    const enKg = numero / 1000;
+
+    return enKg.toLocaleString("es-EC", {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 2, // 👈 aquí lo limitas
+    });
+  }
+
+  return numero.toLocaleString("es-EC", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  });
+};
+
+const etiquetaUnidadConsumo = () => {
+  return unidadConsumo.value === "kg" ? "kg" : "gr";
+};
+
+const irATablaConsumo = () => {
+  vistaGalpon.value = "consumo";
+};
+
+const volverATablaControl = () => {
+  vistaGalpon.value = "control";
+};
+
+// 👈 Modifica esta función para recibir y pasar el evento
+const cambiarASheet = (event, index) => {
+  vistaGalpon.value = "control";
+  irASheet(event, index);
+};
+
+const cambiarAEstadisticas = () => {
+  vistaGalpon.value = "control";
+  irAEstadisticas();
+};
+
 const {
+  selectedTabs,
+  setTableWrapperRef,
+  recalcularSheet,
+  tablaConsumoActual,
+  totalConsumoGrActual,
+  totalFundasActual,
   estadoGuardado,
   esFormatoActivo,
   resetResizeCol,
@@ -102,6 +176,10 @@ const {
   exportarDatos,
   exportando,
 } = useSheets();
+
+onMounted(() => {
+  setTableWrapperRef(tableWrapperRef);
+});
 </script>
 
 <template>
@@ -111,8 +189,11 @@ const {
         v-for="(sheet, index) in sheets"
         :key="sheet.id"
         class="tab-btn"
-        :class="{ active: activeTab === index }"
-        @click="irASheet(index)"
+        :class="{
+          active: activeTab === index,
+          'tab-selected': selectedTabs.includes(index),
+        }"
+        @click="cambiarASheet($event, index)"
         @contextmenu="abrirMenuContextual($event, index)"
       >
         {{ sheet.nombre }}
@@ -129,13 +210,47 @@ const {
       <button
         class="tab-btn stats-btn"
         :class="{ active: activeTab === 'stats' }"
-        @click="irAEstadisticas"
+        @click="cambiarAEstadisticas"
       >
         Estadísticas
       </button>
 
       <div class="tabs-actions-right">
-        <button class="tab-config" @click="handleConfigClick">⚙️</button>
+        <button
+          class="tab-config"
+          @click="handleConfigClick"
+          title="Configuración"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            class="tab-config-icon"
+          >
+            <circle cx="12" cy="12" r="3"></circle>
+            <path
+              d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83
+           2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33
+           1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09
+           a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06
+           a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06
+           a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3
+           a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1
+           1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83
+           2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33h.01
+           a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09
+           a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06
+           a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06
+           a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21
+           a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
+            ></path>
+          </svg>
+        </button>
+
         <button class="tab-new-set" @click="nuevoConjunto">Nuevo lote</button>
       </div>
     </div>
@@ -150,7 +265,11 @@ const {
       @click.stop
     >
       <button class="context-menu-item danger" @click="eliminarSheet">
-        Eliminar hoja
+        Eliminar hoja{{
+          selectedTabs.length > 1 && selectedTabs.includes(contextMenu.index)
+            ? "s (" + selectedTabs.length + ")"
+            : ""
+        }}
       </button>
     </div>
 
@@ -173,9 +292,12 @@ const {
         </div>
       </div>
 
-      <div v-show="!tablaExpandida" class="info-grid">
+      <div
+        v-if="!tablaExpandida && vistaGalpon !== 'consumo'"
+        class="info-grid"
+      >
         <div class="field">
-          <label>Nombre del conjunto:</label>
+          <label>Nombre del lote:</label>
           <input v-model="conjunto.nombre" />
         </div>
 
@@ -219,131 +341,132 @@ const {
         </div>
       </div>
 
-      <div class="actions" style="justify-content: space-between">
-        <div class="format-toolbar">
-          <div class="toolbar-group">
-            <button
-              class="tool-btn"
-              :class="{ active: esFormatoActivo('h', 'left') }"
-              @click.stop="aplicarAlineacion('h', 'left')"
-              title="Alinear izquierda"
-              type="button"
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <line x1="4" y1="6" x2="14" y2="6" />
-                <line x1="4" y1="10" x2="20" y2="10" />
-                <line x1="4" y1="14" x2="14" y2="14" />
-                <line x1="4" y1="18" x2="20" y2="18" />
-              </svg>
-            </button>
+      <div class="actions">
+        <div class="actions-left">
+          <div v-if="vistaGalpon !== 'consumo'" class="format-toolbar">
+            <div class="toolbar-group">
+              <button
+                class="tool-btn"
+                :class="{ active: esFormatoActivo('h', 'left') }"
+                @click.stop="aplicarAlineacion('h', 'left')"
+                title="Alinear izquierda"
+                type="button"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <line x1="4" y1="6" x2="14" y2="6" />
+                  <line x1="4" y1="10" x2="20" y2="10" />
+                  <line x1="4" y1="14" x2="14" y2="14" />
+                  <line x1="4" y1="18" x2="20" y2="18" />
+                </svg>
+              </button>
 
-            <button
-              class="tool-btn"
-              :class="{ active: esFormatoActivo('h', 'center') }"
-              @click.stop="aplicarAlineacion('h', 'center')"
-              title="Centrar"
-              type="button"
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <line x1="7" y1="6" x2="17" y2="6" />
-                <line x1="4" y1="10" x2="20" y2="10" />
-                <line x1="7" y1="14" x2="17" y2="14" />
-                <line x1="4" y1="18" x2="20" y2="18" />
-              </svg>
-            </button>
+              <button
+                class="tool-btn"
+                :class="{ active: esFormatoActivo('h', 'center') }"
+                @click.stop="aplicarAlineacion('h', 'center')"
+                title="Centrar"
+                type="button"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <line x1="7" y1="6" x2="17" y2="6" />
+                  <line x1="4" y1="10" x2="20" y2="10" />
+                  <line x1="7" y1="14" x2="17" y2="14" />
+                  <line x1="4" y1="18" x2="20" y2="18" />
+                </svg>
+              </button>
 
-            <button
-              class="tool-btn"
-              :class="{ active: esFormatoActivo('h', 'right') }"
-              @click.stop="aplicarAlineacion('h', 'right')"
-              title="Alinear derecha"
-              type="button"
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <line x1="10" y1="6" x2="20" y2="6" />
-                <line x1="4" y1="10" x2="20" y2="10" />
-                <line x1="10" y1="14" x2="20" y2="14" />
-                <line x1="4" y1="18" x2="20" y2="18" />
-              </svg>
-            </button>
-          </div>
+              <button
+                class="tool-btn"
+                :class="{ active: esFormatoActivo('h', 'right') }"
+                @click.stop="aplicarAlineacion('h', 'right')"
+                title="Alinear derecha"
+                type="button"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <line x1="10" y1="6" x2="20" y2="6" />
+                  <line x1="4" y1="10" x2="20" y2="10" />
+                  <line x1="10" y1="14" x2="20" y2="14" />
+                  <line x1="4" y1="18" x2="20" y2="18" />
+                </svg>
+              </button>
+            </div>
 
-          <div class="toolbar-separator"></div>
+            <div class="toolbar-separator"></div>
 
-          <div class="toolbar-group">
-            <button
-              class="tool-btn"
-              :class="{ active: esFormatoActivo('v', 'top') }"
-              @click.stop="aplicarAlineacion('v', 'top')"
-              title="Alinear arriba"
-              type="button"
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <line x1="5" y1="5" x2="19" y2="5" />
-                <line x1="8" y1="9" x2="8" y2="17" />
-                <line x1="12" y1="9" x2="12" y2="17" />
-                <line x1="16" y1="9" x2="16" y2="17" />
-              </svg>
-            </button>
+            <div class="toolbar-group">
+              <button
+                class="tool-btn"
+                :class="{ active: esFormatoActivo('v', 'top') }"
+                @click.stop="aplicarAlineacion('v', 'top')"
+                title="Alinear arriba"
+                type="button"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <line x1="5" y1="5" x2="19" y2="5" />
+                  <line x1="8" y1="9" x2="8" y2="17" />
+                  <line x1="12" y1="9" x2="12" y2="17" />
+                  <line x1="16" y1="9" x2="16" y2="17" />
+                </svg>
+              </button>
 
-            <button
-              class="tool-btn"
-              :class="{ active: esFormatoActivo('v', 'middle') }"
-              @click.stop="aplicarAlineacion('v', 'middle')"
-              title="Alinear medio"
-              type="button"
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <line x1="5" y1="12" x2="19" y2="12" />
-                <line x1="8" y1="7" x2="8" y2="17" />
-                <line x1="12" y1="7" x2="12" y2="17" />
-                <line x1="16" y1="7" x2="16" y2="17" />
-              </svg>
-            </button>
+              <button
+                class="tool-btn"
+                :class="{ active: esFormatoActivo('v', 'middle') }"
+                @click.stop="aplicarAlineacion('v', 'middle')"
+                title="Alinear medio"
+                type="button"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <line x1="5" y1="12" x2="19" y2="12" />
+                  <line x1="8" y1="7" x2="8" y2="17" />
+                  <line x1="12" y1="7" x2="12" y2="17" />
+                  <line x1="16" y1="7" x2="16" y2="17" />
+                </svg>
+              </button>
 
-            <button
-              class="tool-btn"
-              :class="{ active: esFormatoActivo('v', 'bottom') }"
-              @click.stop="aplicarAlineacion('v', 'bottom')"
-              title="Alinear abajo"
-              type="button"
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <line x1="5" y1="19" x2="19" y2="19" />
-                <line x1="8" y1="7" x2="8" y2="15" />
-                <line x1="12" y1="7" x2="12" y2="15" />
-                <line x1="16" y1="7" x2="16" y2="15" />
-              </svg>
-            </button>
-          </div>
+              <button
+                class="tool-btn"
+                :class="{ active: esFormatoActivo('v', 'bottom') }"
+                @click.stop="aplicarAlineacion('v', 'bottom')"
+                title="Alinear abajo"
+                type="button"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <line x1="5" y1="19" x2="19" y2="19" />
+                  <line x1="8" y1="7" x2="8" y2="15" />
+                  <line x1="12" y1="7" x2="12" y2="15" />
+                  <line x1="16" y1="7" x2="16" y2="15" />
+                </svg>
+              </button>
+            </div>
 
-          <div class="toolbar-separator"></div>
+            <div class="toolbar-separator"></div>
 
-          <div class="toolbar-group">
-            <button
-              class="tool-btn tool-btn-wrap"
-              :class="{ active: esFormatoActivo('wrap') }"
-              @click.stop="aplicarAjusteTexto()"
-              title="Ajustar texto"
-              type="button"
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <line x1="4" y1="7" x2="20" y2="7" />
-                <line x1="4" y1="11" x2="14" y2="11" />
-                <path d="M14 11h2a3 3 0 0 1 0 6h-4" />
-                <polyline points="13,15 10,17 13,19" />
-              </svg>
-            </button>
+            <div class="toolbar-group">
+              <button
+                class="tool-btn tool-btn-wrap"
+                :class="{ active: esFormatoActivo('wrap') }"
+                @click.stop="aplicarAjusteTexto()"
+                title="Ajustar texto"
+                type="button"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <line x1="4" y1="7" x2="20" y2="7" />
+                  <line x1="4" y1="11" x2="14" y2="11" />
+                  <path d="M14 11h2a3 3 0 0 1 0 6h-4" />
+                  <polyline points="13,15 10,17 13,19" />
+                </svg>
+              </button>
+            </div>
           </div>
         </div>
 
-        <div style="display: flex; gap: 8px; align-items: center">
+        <div class="actions-right">
           <div
             v-if="estadoGuardado.tipo !== 'idle'"
             class="save-status"
             :class="estadoGuardado.tipo"
           >
-            <!-- ÉXITO -->
             <span
               v-if="estadoGuardado.tipo.includes('exito')"
               class="icon-success"
@@ -359,7 +482,6 @@ const {
               </svg>
             </span>
 
-            <!-- ERROR -->
             <span
               v-if="estadoGuardado.tipo.includes('error')"
               class="icon-error"
@@ -373,6 +495,7 @@ const {
                 />
               </svg>
             </span>
+
             <span class="status-msg">{{ estadoGuardado.mensaje }}</span>
           </div>
 
@@ -435,7 +558,11 @@ const {
         </div>
       </div>
 
-      <div class="table-wrapper">
+      <div
+        v-if="vistaGalpon === 'control'"
+        class="table-wrapper"
+        ref="tableWrapperRef"
+      >
         <table class="control-table">
           <thead>
             <tr>
@@ -1042,18 +1169,207 @@ const {
         </table>
       </div>
 
-      <div v-show="!tablaExpandida" class="summary">
-        <div class="summary-left">
-          <p>
-            <strong>Kilos alimento consumidos:</strong>
-            {{ totalAlimentoActual }}
-          </p>
-          <p><strong>Consumo total de gas:</strong> {{ totalGasActual }}</p>
-          <p><strong>Mortalidad total:</strong> {{ totalMortalidadActual }}</p>
-          <p>
-            <strong>Mortalidad %:</strong>
-            {{ mortalidadPorcentajeFinalActual }}%
-          </p>
+      <div
+        v-if="!tablaExpandida && vistaGalpon === 'control'"
+        class="view-nav-actions"
+      >
+        <button
+          type="button"
+          class="action-btn action-btn-primary"
+          @click="irATablaConsumo"
+        >
+          Siguiente: Tabla de consumo
+        </button>
+      </div>
+
+      <div v-if="vistaGalpon === 'consumo'" class="food-table-section">
+        <div class="food-table-header">
+          <div class="food-table-header-left">
+            <h3>Tabla de consumo de alimento</h3>
+
+            <div class="unit-switcher">
+              <span class="unit-label">Unidad:</span>
+              <button
+                type="button"
+                class="unit-btn"
+                @click="cambiarUnidadConsumo"
+              >
+                {{ etiquetaUnidadConsumo() }}
+              </button>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            class="action-btn action-btn-secondary"
+            @click="volverATablaControl"
+          >
+            Anterior: Tabla del galpón
+          </button>
+        </div>
+
+        <div class="table-wrapper food-table-wrapper food-table-wrapper--fit">
+          <table class="control-table food-table">
+            <thead>
+              <tr>
+                <th>Semana</th>
+                <th>Día</th>
+                <th>Fecha</th>
+                <th>Cantidad de Pollos</th>
+                <th>Consumo Individual [{{ etiquetaUnidadConsumo() }}]</th>
+                <th>Consumo Total [{{ etiquetaUnidadConsumo() }}]</th>
+                <th>Fundas</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              <tr
+                v-for="(fila, index) in tablaConsumoActual"
+                :key="`consumo-${currentSheet.id}-${fila.dia}`"
+              >
+                <td
+                  v-if="fila.dia % 7 === 1"
+                  :rowspan="7"
+                  style="vertical-align: middle"
+                >
+                  {{ fila.semana }}
+                </td>
+
+                <td>
+                  <div
+                    class="cell-content readonly-cell"
+                    style="justify-content: center"
+                  >
+                    <div class="cell-display" style="justify-content: center">
+                      {{ fila.dia }}
+                    </div>
+                  </div>
+                </td>
+
+                <td>
+                  <div
+                    class="cell-content readonly-cell"
+                    style="justify-content: center"
+                  >
+                    <div class="cell-display" style="justify-content: center">
+                      {{ fila.fecha }}
+                    </div>
+                  </div>
+                </td>
+
+                <td>
+                  <div
+                    class="cell-content readonly-cell"
+                    style="justify-content: center"
+                  >
+                    <div class="cell-display" style="justify-content: center">
+                      {{ fila.cantidadPollos }}
+                    </div>
+                  </div>
+                </td>
+
+                <td
+                  :class="obtenerClasesSeleccion(index, 2)"
+                  :style="getEstiloAlineacion(index, 2)"
+                  @mousedown.left="handleCellMouseDown($event, index, 2)"
+                  @dblclick.left="handleCellDoubleClick($event, index, 2)"
+                  @mouseenter="handleCellMouseEnter($event, index, 2)"
+                  style="position: relative; padding: 0"
+                >
+                  <div
+                    class="cell-content"
+                    :style="getEstiloContenidoAlineacion(index, 2)"
+                  >
+                    <template v-if="isEditingCell(index, 2)">
+                      <div
+                        ref="activeEditor"
+                        class="cell-editor"
+                        :style="getEstiloEditorCelda(index, 2)"
+                        contenteditable="true"
+                        spellcheck="false"
+                        @input="handleEditableInput($event, index, 2)"
+                        @blur="
+                          commitCellEdit(index, 2, () =>
+                            calcularAlimentoHasta(currentSheet, index),
+                          )
+                        "
+                        @keydown="handleEditorKeydown($event, index, 2)"
+                      >
+                        {{ fila.consumoIndividualGr }}
+                      </div>
+                    </template>
+
+                    <template v-else>
+                      <div
+                        class="cell-display"
+                        :style="getEstiloTextoCelda(index, 2)"
+                      >
+                        {{ formatearConsumo(fila.consumoIndividualGr) }}
+                      </div>
+                    </template>
+                  </div>
+
+                  <div
+                    v-if="esCeldaUnicaSeleccionada(index, 2)"
+                    class="fill-handle-square"
+                    @mousedown.stop.prevent="
+                      iniciarArrastreFill($event, index, 2)
+                    "
+                  ></div>
+                </td>
+
+                <td>
+                  <div
+                    class="cell-content readonly-cell"
+                    style="justify-content: center"
+                  >
+                    <div class="cell-display" style="justify-content: center">
+                      {{ formatearConsumoTotal(fila.consumoTotalGr) }}
+                    </div>
+                  </div>
+                </td>
+
+                <td>
+                  <div
+                    class="cell-content readonly-cell"
+                    style="justify-content: center"
+                  >
+                    <div class="cell-display" style="justify-content: center">
+                      {{ fila.fundas }}
+                    </div>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- ✅ AHORA EL RESUMEN ABAJO -->
+        <div v-if="!tablaExpandida" class="summary">
+          <div class="summary-left">
+            <p>
+              <strong>Total consumo individual acumulado:</strong>
+              {{ totalAlimentoActual }}
+            </p>
+            <p><strong>Consumo total de gas:</strong> {{ totalGasActual }}</p>
+            <p>
+              <strong>Mortalidad total:</strong> {{ totalMortalidadActual }}
+            </p>
+            <p>
+              <strong>Mortalidad %:</strong>
+              {{ mortalidadPorcentajeFinalActual }}%
+            </p>
+            <p>
+              <strong
+                >Consumo total alimento [{{ etiquetaUnidadConsumo() }}]:</strong
+              >
+              {{ formatearConsumo(totalConsumoGrActual) }}
+            </p>
+            <p>
+              <strong>Total fundas:</strong>
+              {{ totalFundasActual }}
+            </p>
+          </div>
         </div>
       </div>
     </div>
@@ -1152,6 +1468,91 @@ const {
     <div class="modal-box">
       <h3>{{ modalConfirmacion.titulo }}</h3>
       <p style="white-space: pre-line">{{ modalConfirmacion.texto }}</p>
+
+      <div
+        v-if="modalConfirmacion.mostrarEstadoGuardado"
+        style="
+          margin: 15px 0;
+          padding: 12px;
+          background: #f8f9fa;
+          border-radius: 6px;
+          border: 1px solid #ddd;
+        "
+      >
+        <p style="margin: 0 0 10px 0; font-size: 0.9em; color: #555">
+          Estado del lote actual:
+        </p>
+
+        <div
+          style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap"
+        >
+          <div
+            class="save-status"
+            :class="estadoGuardado.tipo"
+            style="margin: 0; position: static"
+          >
+            <span
+              v-if="
+                estadoGuardado.tipo.includes('exito') ||
+                estadoGuardado.tipo === 'idle'
+              "
+              class="icon-success"
+              style="color: #2e7d32"
+            >
+              <svg viewBox="0 0 24 24" fill="none" width="20" height="20">
+                <path
+                  d="M5 13l4 4L19 7"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </span>
+
+            <span
+              v-if="estadoGuardado.tipo.includes('error')"
+              class="icon-error"
+              style="color: #d32f2f"
+            >
+              <svg viewBox="0 0 24 24" fill="none" width="20" height="20">
+                <path
+                  d="M6 6l12 12M18 6l-12 12"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                />
+              </svg>
+            </span>
+
+            <span
+              class="status-msg"
+              style="font-weight: bold"
+              :style="{
+                color: estadoGuardado.tipo.includes('error')
+                  ? '#d32f2f'
+                  : '#2e7d32',
+              }"
+            >
+              {{
+                estadoGuardado.tipo === "idle"
+                  ? "Trabajo guardado correctamente"
+                  : estadoGuardado.mensaje
+              }}
+            </span>
+          </div>
+
+          <button
+            v-if="estadoGuardado.tipo.includes('error')"
+            type="button"
+            class="btn-manual-save"
+            @click="guardar(true)"
+            style="margin-left: auto"
+          >
+            Guardar manual
+          </button>
+        </div>
+      </div>
       <div class="modal-actions">
         <button class="btn-secondary" @click="cerrarConfirmacion">
           Cancelar
