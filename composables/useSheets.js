@@ -141,14 +141,37 @@ export function useSheets() {
   });
 
   const exportando = ref(false);
+  const pasoExportacion = ref(1);
+  const galponesAExportar = ref([]);
 
-  const abrirExportacion = () => {
+const abrirExportacion = () => {
+    pasoExportacion.value = 1;
+    // Por defecto, marcamos todos los galpones para exportar
+    galponesAExportar.value = sheets.value.map((_, i) => i);
     modalExportacion.value.visible = true;
   };
 
   const cerrarExportacion = () => {
     if (exportando.value) return;
     modalExportacion.value.visible = false;
+  };
+
+  const siguientePasoExportacion = () => {
+    if (galponesAExportar.value.length > 0) {
+      pasoExportacion.value = 2;
+    }
+  };
+
+  const todosGalponesSeleccionados = computed(() => {
+    return sheets.value.length > 0 && galponesAExportar.value.length === sheets.value.length;
+  });
+
+  const toggleTodosGalpones = (e) => {
+    if (e.target.checked) {
+      galponesAExportar.value = sheets.value.map((_, i) => i);
+    } else {
+      galponesAExportar.value = [];
+    }
   };
 
   const sanitizarNombreArchivo = (texto) => {
@@ -1633,7 +1656,7 @@ export function useSheets() {
     );
   };
 
-  const crearExcelBuffer = async () => {
+const crearExcelBuffer = async () => {
     recalcularTodasLasHojas();
 
     const workbook = new ExcelJS.Workbook();
@@ -1641,7 +1664,10 @@ export function useSheets() {
     workbook.created = new Date();
     workbook.calcProperties.fullCalcOnLoad = true;
 
-    sheets.value.forEach((sheet, index) => {
+    // Filtramos las hojas para exportar solo las que el usuario seleccionó
+    const hojasAExportar = sheets.value.filter((_, i) => galponesAExportar.value.includes(i));
+
+    hojasAExportar.forEach((sheet, index) => {
       // =========================================================
       // 1. CREACIÓN DE LA HOJA DEL GALPÓN
       // =========================================================
@@ -2026,7 +2052,27 @@ export function useSheets() {
       };
     });
 
-    resumenGalpones.value.forEach((item, idx) => {
+    // Mapear solo los galpones seleccionados para las estadísticas
+    const statsAExportar = hojasAExportar.map((sheet, index) => {
+      const cantidad = Number(sheet.form.cantidad) || 0;
+      const mortalidad = getTotalMortalidadSheet(sheet);
+
+      return {
+        numero: index + 1,
+        id: sheet.id,
+        galpon: sheet.form.galpon || `Galpón ${index + 1}`,
+        lote: sheet.form.lote || "-",
+        cantidad,
+        alimento: getTotalAlimentoSheet(sheet),
+        gas: getTotalGasSheet(sheet),
+        mortalidad,
+        porcentaje: cantidad
+          ? ((mortalidad / cantidad) * 100).toFixed(2)
+          : "0.00",
+      };
+    });
+
+    statsAExportar.forEach((item, idx) => {
       const row = 4 + idx;
       wsStats.getRow(row).values = [
         item.numero,
@@ -2053,7 +2099,7 @@ export function useSheets() {
       });
     });
 
-    const totalRow = 5 + resumenGalpones.value.length;
+    const totalRow = 5 + statsAExportar.length;
     wsStats.getCell(`D${totalRow}`).value = "TOTALES";
     wsStats.getCell(`D${totalRow}`).font = { bold: true };
     wsStats.getCell(`E${totalRow}`).value = {
@@ -2092,7 +2138,10 @@ export function useSheets() {
     const doc = new jsPDF("l", "mm", "a4");
     const margenX = 10;
 
-    sheets.value.forEach((sheet, index) => {
+    // Filtramos las hojas para exportar solo las que el usuario seleccionó
+    const hojasAExportar = sheets.value.filter((_, i) => galponesAExportar.value.includes(i));
+
+    hojasAExportar.forEach((sheet, index) => {
       // =========================================================
       // 1. PÁGINA DEL GALPÓN
       // =========================================================
@@ -2311,6 +2360,26 @@ export function useSheets() {
     doc.setFontSize(14);
     doc.text("ESTADÍSTICAS GENERALES", margenX, 12);
 
+    // Mapear solo los galpones seleccionados para las estadísticas del PDF
+    const statsAExportar = hojasAExportar.map((sheet, index) => {
+      const cantidad = Number(sheet.form.cantidad) || 0;
+      const mortalidad = getTotalMortalidadSheet(sheet);
+
+      return {
+        numero: index + 1,
+        id: sheet.id,
+        galpon: sheet.form.galpon || `Galpón ${index + 1}`,
+        lote: sheet.form.lote || "-",
+        cantidad,
+        alimento: getTotalAlimentoSheet(sheet),
+        gas: getTotalGasSheet(sheet),
+        mortalidad,
+        porcentaje: cantidad
+          ? ((mortalidad / cantidad) * 100).toFixed(2)
+          : "0.00",
+      };
+    });
+
     autoTable(doc, {
       startY: 20,
       head: [
@@ -2326,7 +2395,7 @@ export function useSheets() {
           "% Mortalidad",
         ],
       ],
-      body: resumenGalpones.value.map((item) => [
+      body: statsAExportar.map((item) => [
         item.numero,
         item.id,
         item.galpon,
@@ -2349,24 +2418,31 @@ export function useSheets() {
 
     const y = doc.lastAutoTable.finalY + 8;
     doc.setFontSize(11);
+    
+    // Calcular sumas solo con los seleccionados
+    const totalCantidad = statsAExportar.reduce((acc, item) => acc + item.cantidad, 0);
+    const totalAlimento = statsAExportar.reduce((acc, item) => acc + item.alimento, 0);
+    const totalGas = statsAExportar.reduce((acc, item) => acc + item.gas, 0);
+    const totalMortalidad = statsAExportar.reduce((acc, item) => acc + item.mortalidad, 0);
+
     doc.text(
-      `Total galpones: ${estadisticasGenerales.value.totalGalpones}`,
+      `Total galpones: ${hojasAExportar.length}`,
       margenX,
       y,
     );
     doc.text(
-      `Total pollos ingresados: ${estadisticasGenerales.value.totalCantidad}`,
+      `Total pollos ingresados: ${totalCantidad}`,
       70,
       y,
     );
     doc.text(
-      `Total alimento: ${estadisticasGenerales.value.totalAlimento}`,
+      `Total alimento: ${totalAlimento}`,
       145,
       y,
     );
-    doc.text(`Total gas: ${estadisticasGenerales.value.totalGas}`, 210, y);
+    doc.text(`Total gas: ${totalGas}`, 210, y);
     doc.text(
-      `Total mortalidad: ${estadisticasGenerales.value.totalMortalidad}`,
+      `Total mortalidad: ${totalMortalidad}`,
       260,
       y,
     );
@@ -3646,5 +3722,10 @@ export function useSheets() {
     exportando,
     estadoGuardado,
     setTableWrapperRef,
+    pasoExportacion,
+    galponesAExportar,
+    siguientePasoExportacion,
+    todosGalponesSeleccionados,
+    toggleTodosGalpones,
   };
 }

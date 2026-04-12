@@ -98,6 +98,11 @@ const cambiarAEstadisticas = () => {
 };
 
 const {
+  pasoExportacion,
+  galponesAExportar,
+  siguientePasoExportacion,
+  todosGalponesSeleccionados,
+  toggleTodosGalpones,
   selectedTabs,
   setTableWrapperRef,
   recalcularSheet,
@@ -216,6 +221,34 @@ onMounted(() => {
       </button>
 
       <div class="tabs-actions-right">
+        <button
+          class="tab-config"
+          @click="abrirExportacion"
+          title="Exportar Información"
+          style="
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 0 12px;
+            width: auto;
+          "
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            class="tab-config-icon"
+          >
+            <path d="M12 3v11" />
+            <path d="M8 10l4 4 4-4" />
+            <path d="M4 17v3h16v-3" />
+          </svg>
+          <span style="font-size: 14px; font-weight: 500">Exportar</span>
+        </button>
+
         <button
           class="tab-config"
           @click="handleConfigClick"
@@ -538,21 +571,6 @@ onMounted(() => {
               <span>
                 {{ tablaExpandida ? "Contraer tabla" : "Expandir tabla" }}
               </span>
-            </button>
-
-            <button
-              type="button"
-              class="action-btn action-btn-primary"
-              @click="abrirExportacion"
-            >
-              <span class="action-btn-icon">
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M12 3v11" />
-                  <path d="M8 10l4 4 4-4" />
-                  <path d="M4 17v3h16v-3" />
-                </svg>
-              </span>
-              <span>Exportar</span>
             </button>
           </div>
         </div>
@@ -1570,51 +1588,129 @@ onMounted(() => {
   </div>
 
   <div v-if="modalExportacion.visible" class="modal-overlay">
-    <div class="modal-box" style="position: relative">
+    <div class="modal-box" style="position: relative; min-width: 400px">
       <h3>Exportar conjunto</h3>
-      <p v-if="!exportando">
-        Escoge el formato en el que deseas exportar la información del conjunto.
-      </p>
-      <p v-else>Se está generando el archivo, espera un momento...</p>
 
-      <div class="modal-actions" style="flex-wrap: wrap; gap: 10px">
-        <button
-          class="btn-primary"
-          :disabled="exportando"
-          @click="exportarDatos('pdf')"
-        >
-          {{ exportando ? "Exportando..." : "PDF" }}
-        </button>
+      <div v-if="pasoExportacion === 1">
+        <p>Selecciona los galpones que deseas incluir en el reporte:</p>
 
-        <button
-          class="btn-primary"
-          :disabled="exportando"
-          @click="exportarDatos('excel')"
+        <div
+          style="
+            max-height: 200px;
+            overflow-y: auto;
+            margin: 15px 0;
+            border: 1px solid #ddd;
+            padding: 15px;
+            border-radius: 6px;
+            background: #fafafa;
+          "
         >
-          {{ exportando ? "Exportando..." : "Excel" }}
-        </button>
+          <label
+            style="
+              display: flex;
+              align-items: center;
+              gap: 8px;
+              margin-bottom: 10px;
+              cursor: pointer;
+            "
+          >
+            <input
+              type="checkbox"
+              @change="toggleTodosGalpones"
+              :checked="todosGalponesSeleccionados"
+            />
+            <strong>Seleccionar Todos</strong>
+          </label>
+          <hr style="border: 0; border-top: 1px solid #ddd; margin: 10px 0" />
+          <label
+            v-for="(sheet, index) in sheets"
+            :key="sheet.id"
+            style="
+              display: flex;
+              align-items: center;
+              gap: 8px;
+              margin-bottom: 8px;
+              cursor: pointer;
+            "
+          >
+            <input type="checkbox" v-model="galponesAExportar" :value="index" />
+            {{ sheet.nombre }} ({{ sheet.id }})
+          </label>
+        </div>
 
-        <button
-          class="btn-primary"
-          :disabled="exportando"
-          @click="exportarDatos('ambas')"
-        >
-          {{ exportando ? "Exportando..." : "PDF + Excel (ZIP)" }}
-        </button>
-
-        <button
-          class="btn-secondary"
-          :disabled="exportando"
-          @click="cerrarExportacion"
-        >
-          Cancelar
-        </button>
+        <div class="modal-actions">
+          <button class="btn-secondary" @click="cerrarExportacion">
+            Cancelar
+          </button>
+          <button
+            class="btn-primary"
+            :disabled="galponesAExportar.length === 0"
+            @click="siguientePasoExportacion"
+          >
+            Siguiente
+          </button>
+        </div>
       </div>
 
-      <div v-if="exportando" class="export-loading-overlay">
-        <div class="export-loading-box">
-          <div class="export-spinner"></div>
-          <p>Exportando archivo...</p>
+      <div v-else-if="pasoExportacion === 2">
+        <p v-if="!exportando">
+          Se exportarán
+          <strong>{{ galponesAExportar.length }}</strong> galpón(es). Escoge el
+          formato:
+        </p>
+        <p v-else>Se está generando el archivo, espera un momento...</p>
+
+        <div
+          class="modal-actions"
+          style="flex-wrap: wrap; gap: 10px; margin-top: 20px"
+        >
+          <button
+            class="btn-primary"
+            :disabled="exportando"
+            @click="exportarDatos('pdf')"
+          >
+            {{ exportando ? "Exportando..." : "PDF" }}
+          </button>
+
+          <button
+            class="btn-primary"
+            :disabled="exportando"
+            @click="exportarDatos('excel')"
+          >
+            {{ exportando ? "Exportando..." : "Excel" }}
+          </button>
+
+          <button
+            class="btn-primary"
+            :disabled="exportando"
+            @click="exportarDatos('ambas')"
+          >
+            {{ exportando ? "Exportando..." : "PDF + Excel (ZIP)" }}
+          </button>
+
+          <div style="flex-basis: 100%; height: 0"></div>
+          <button
+            class="btn-secondary"
+            :disabled="exportando"
+            @click="pasoExportacion = 1"
+          >
+            Atrás
+          </button>
+
+          <button
+            class="btn-secondary"
+            :disabled="exportando"
+            @click="cerrarExportacion"
+          >
+            Cancelar
+          </button>
+        </div>
+
+        <div v-if="exportando" class="export-loading-overlay">
+          <div class="export-loading-box">
+            <div class="export-spinner"></div>
+            <p>Exportando archivo...</p>
+          </div>
         </div>
       </div>
     </div>
