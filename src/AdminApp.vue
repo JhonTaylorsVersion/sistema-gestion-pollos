@@ -9,9 +9,10 @@ import JSZip from "jszip";
 import { save, ask, message, open } from "@tauri-apps/plugin-dialog";
 import { writeFile, readFile, remove } from "@tauri-apps/plugin-fs";
 
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { revealItemInDir, openUrl } from "@tauri-apps/plugin-opener";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useDrive } from "./composables/useDrive";
+import { useNotify } from "./composables/useNotify";
 
 type PdfCell =
   | string
@@ -216,6 +217,12 @@ const subidaDriveExitosa = ref(false);
 const showSupportMode = ref(false);
 const systemId = ref("");
 const showLogoutConfirmModal = ref(false);
+const showMasterKeyUploadModal = ref(false);
+const pendingMasterKeyBytes = ref<Uint8Array | null>(null);
+const subiendoLlaveADrive = ref(false);
+
+const { toast, toastY, draggingToast, mostrarToast, handleToastMouseDown } =
+  useNotify();
 
 const modalSeguridadTitulo = computed(() => {
   if (verifyTargetFileId.value === "RESET_2FA_ACTION")
@@ -294,16 +301,10 @@ const forzarResetMaestro = async () => {
       recoveryCodes.value = [];
       is2FAConfirmed.value = false;
 
-      await message("Protección 2FA eliminada con éxito.", {
-        title: "Reset Completo",
-        kind: "info",
-      });
+      mostrarToast("Protección 2FA eliminada con éxito.");
     } catch (e) {
       console.error("Error en reset maestro:", e);
-      await message("Error al resetear la base de datos.", {
-        title: "Error",
-        kind: "error",
-      });
+      mostrarToast("Error al resetear la base de datos.", "error");
     }
   }
 };
@@ -332,32 +333,13 @@ const descargarCodigosRecuperacion = async () => {
       });
       haDescargadoCodigos.value = true;
 
-      const subida = await ask(
-        "Llave Maestra guardada en tu PC. ¿Deseas subir una copia cifrada a tu Google Drive?",
-        {
-          title: "Respaldo en la Nube",
-          kind: "info",
-        },
-      );
-
-      if (subida) {
-        await subirCodigosADrive(contentArray);
-      } else {
-        await message(
-          "Llave Maestra descargada con éxito. Ahora puedes finalizar.",
-          {
-            title: "Seguridad Lista",
-            kind: "info",
-          },
-        );
-      }
+      // En lugar de ask(), mostramos nuestro modal premium
+      pendingMasterKeyBytes.value = contentArray;
+      showMasterKeyUploadModal.value = true;
     }
   } catch (e) {
     console.error("Error al descargar códigos:", e);
-    await message("No se pudo guardar el archivo. Inténtalo de nuevo.", {
-      title: "Error",
-      kind: "error",
-    });
+    mostrarToast("No se pudo guardar el archivo. Inténtalo de nuevo.", "error");
   }
 };
 
@@ -371,7 +353,7 @@ const iniciarSesion = async () => {
 
     await Promise.all([cargarGalpones(), cargarConjuntos(), cargarConfig2FA()]);
   } else {
-    alert("Credenciales incorrectas");
+    mostrarToast("Credenciales incorrectas", "error");
   }
 };
 
@@ -398,10 +380,7 @@ const generarNuevoQR = async () => {
     input2FACode.value = "";
   } catch (e) {
     console.error(e);
-    await message(`Error al iniciar configuración 2FA: ${e}`, {
-      title: "Error",
-      kind: "error",
-    });
+    mostrarToast(`Error al iniciar configuración 2FA: ${e}`, "error");
   }
 };
 
@@ -442,10 +421,7 @@ const confirmar2FASetup = async () => {
       show2FASetupModal.value = false;
       showRecoveryModal.value = true;
     } else {
-      await message("Código incorrecto. Verifica tu celular.", {
-        title: "Error de Código",
-        kind: "error",
-      });
+      mostrarToast("Código incorrecto. Verifica tu celular.", "error");
     }
   } catch (e) {
     console.error(e);
@@ -461,15 +437,12 @@ const finalizarConfiguracion2FA = async () => {
   );
   is2FAConfirmed.value = true;
   showRecoveryModal.value = false;
-  await message("Seguridad 2FA configurada y activada correctamente.", {
-    title: "Éxito",
-    kind: "info",
-  });
+  mostrarToast("Seguridad 2FA configurada y activada correctamente.");
 };
 
 const subirCodigosADrive = async (contentArray: Uint8Array) => {
   try {
-    subiendoADrive.value = true;
+    subiendoLlaveADrive.value = true;
     const buffer = contentArray.buffer as ArrayBuffer;
     const blob = new Blob([buffer], { type: "application/octet-stream" });
     const file = new File([blob], "Llave_Maestra_Seguridad.key", {
@@ -478,20 +451,27 @@ const subirCodigosADrive = async (contentArray: Uint8Array) => {
 
     await uploadFileDrive(file);
 
-    subidaDriveExitosa.value = true;
-    await message("Copia cifrada guardada en Google Drive con éxito.", {
-      title: "Respaldo en Nube Listo",
-      kind: "info",
-    });
+    mostrarToast("Copia cifrada guardada en Google Drive con éxito.");
   } catch (e) {
     console.error("Error al subir a Drive:", e);
-    await message("No se pudo subir a Drive. Asegúrate de tener conexión.", {
-      title: "Error de Subida",
-      kind: "error",
-    });
+    mostrarToast("No se pudo subir a Drive.", "error");
   } finally {
-    subiendoADrive.value = false;
+    subiendoLlaveADrive.value = false;
   }
+};
+
+const confirmarSubidaLlave = async () => {
+  if (pendingMasterKeyBytes.value) {
+    await subirCodigosADrive(pendingMasterKeyBytes.value);
+  }
+  showMasterKeyUploadModal.value = false;
+  pendingMasterKeyBytes.value = null;
+};
+
+const cancelarSubidaLlave = () => {
+  showMasterKeyUploadModal.value = false;
+  pendingMasterKeyBytes.value = null;
+  mostrarToast("Llave Maestra descargada con éxito. Asegura tu archivo.");
 };
 
 const cargarLlaveMaestra = async () => {
@@ -522,21 +502,15 @@ const cargarLlaveMaestra = async () => {
         // Opcionalmente podemos auto-confirmar si queremos, pero mejor dejamos que el usuario vea el cambio
         // await procesarEliminacionCon2FA();
       } else {
-        await message(
+        mostrarToast(
           "Esta llave no es válida para este sistema o es de una configuración anterior.",
-          {
-            title: "Llave Inválida",
-            kind: "error",
-          },
+          "error",
         );
       }
     }
   } catch (e) {
     console.error("Error al cargar llave maestra:", e);
-    await message("Error al leer el archivo de llave.", {
-      title: "Error",
-      kind: "error",
-    });
+    mostrarToast("Error al leer el archivo de llave.", "error");
   } finally {
     verificando2FA.value = false;
   }
@@ -568,9 +542,9 @@ const handleKeyFileDrop = async (e: DragEvent) => {
       input2FACode.value = recoveryCodes.value[0];
       await new Promise((r) => setTimeout(r, 800));
     } else {
-      await message(
+      mostrarToast(
         "Este archivo no es una Llave Maestra válida para este sistema.",
-        { title: "Archivo Inválido", kind: "error" },
+        "error",
       );
     }
   } catch (err) {
@@ -640,7 +614,7 @@ const cargarGalpones = async () => {
     galponesLista.value = rows || [];
   } catch (error) {
     console.error("❌ Error al cargar galpones:", error);
-    alert("No se pudieron cargar los galpones.");
+    mostrarToast("No se pudieron cargar los galpones.", "error");
   } finally {
     cargandoGalpones.value = false;
   }
@@ -668,7 +642,7 @@ const cargarConjuntos = async () => {
     conjuntosLista.value = rows || [];
   } catch (error) {
     console.error("❌ Error al cargar conjuntos:", error);
-    alert("No se pudieron cargar los conjuntos.");
+    mostrarToast("No se pudieron cargar los conjuntos.", "error");
   } finally {
     cargandoConjuntos.value = false;
   }
@@ -754,7 +728,7 @@ const buscarRegistros = async () => {
     seccionActiva.value = "busqueda";
   } catch (error) {
     console.error("❌ Error al buscar registros:", error);
-    alert("No se pudo realizar la búsqueda.");
+    mostrarToast("No se pudo realizar la búsqueda.", "error");
   } finally {
     buscando.value = false;
   }
@@ -830,7 +804,7 @@ const verDetalle = async (
     seccionActiva.value = "detalle";
   } catch (error) {
     console.error("❌ Error al cargar detalle:", error);
-    alert("No se pudo cargar la vista de detalle.");
+    mostrarToast("No se pudo cargar la vista de detalle.", "error");
   } finally {
     buscando.value = false;
   }
@@ -1780,7 +1754,7 @@ const exportarDatos = async (tipo: "pdf" | "excel" | "ambas") => {
           await revealItemInDir(rutaDestino);
         } catch (err) {
           console.error("Error al abrir la carpeta:", err);
-          mostrarMensaje("Error", "No se pudo abrir la ubicación del archivo.");
+          mostrarToast("No se pudo abrir la ubicación del archivo.", "error");
         }
       },
       "Abrir ubicación",
@@ -1790,7 +1764,7 @@ const exportarDatos = async (tipo: "pdf" | "excel" | "ambas") => {
     console.error("Error al exportar:", error);
     exportando.value = false;
     cerrarExportacion();
-    mostrarMensaje("Error al exportar", obtenerMensajeErrorLimpio(error));
+    mostrarToast(obtenerMensajeErrorLimpio(error), "error");
   } finally {
     exportando.value = false;
   }
@@ -1942,19 +1916,23 @@ const {
   restoreBackup: restoreBackupDrive,
   deleteBackup: deleteBackupDrive,
   isAuthenticated: authenticatedDrive,
+  isDirty: isDirtyDrive, // Añadido para el indicador de estado
 } = useDrive();
+
+const ejecutarBackupManual = async () => {
+  const success = await uploadBackupDrive(true);
+  if (success) {
+    mostrarToast("Copia de seguridad guardada con éxito en Google Drive");
+  }
+};
 
 const iniciarLoginConSeguridad = async () => {
   try {
     await loginDrive();
     // Si se logueó y no está activado 2FA, forzamos el setup
     if (authenticatedDrive.value && !is2FAConfirmed.value) {
-      await message(
-        "Conexión exitosa. Por políticas de seguridad, es obligatorio configurar tu llave de seguridad y dispositivo Authenticator para proteger tus backups.",
-        {
-          title: "Configuración de Seguridad",
-          kind: "info",
-        },
+      mostrarToast(
+        "Conexión exitosa. Por seguridad, configura tu Authenticator.",
       );
       iniciar2FASetup();
     }
@@ -2099,19 +2077,14 @@ const procesarEliminacionCon2FA = async () => {
             }
           } else {
             // Caso de Drop (no tenemos el path)
-            await message(
+            mostrarToast(
               "Recuerda eliminar el archivo de la Llave Maestra que usaste, ya que no servirá para futuras configuraciones.",
-              { title: "Aviso de Seguridad", kind: "info" },
             );
           }
         }
 
-        await message(
+        mostrarToast(
           "La vinculación anterior ha sido eliminada. Ahora puedes configurar un nuevo dispositivo desde el panel de seguridad.",
-          {
-            title: "Seguridad Reiniciada",
-            kind: "info",
-          },
         );
         return;
       }
@@ -2121,10 +2094,7 @@ const procesarEliminacionCon2FA = async () => {
         show2FAVerifyModal.value = false;
         verifyTargetFileId.value = null;
         await signoutDrive();
-        await message("Sesión de Google Drive cerrada correctamente.", {
-          title: "Éxito",
-          kind: "info",
-        });
+        mostrarToast("Sesión de Google Drive cerrada correctamente.");
         return;
       }
 
@@ -2137,28 +2107,19 @@ const procesarEliminacionCon2FA = async () => {
       filaEliminandoId.value = fileId;
       await deleteBackupDrive(fileId);
 
-      await message("La copia de seguridad ha sido eliminada con éxito.", {
-        title: "Éxito",
-        kind: "info",
-      });
+      mostrarToast("La copia de seguridad ha sido eliminada con éxito.");
 
       // Refrescar lista
       listBackupsDrive();
     } else {
-      await message(
+      mostrarToast(
         "El código ingresado es incorrecto. Por favor, verifica tu aplicación Authenticator.",
-        {
-          title: "Código Inválido",
-          kind: "error",
-        },
+        "error",
       );
     }
   } catch (e) {
     console.error("Error al procesar eliminación 2FA:", e);
-    await message("Ocurrió un error al verificar el código.", {
-      title: "Error",
-      kind: "error",
-    });
+    mostrarToast("Ocurrió un error al verificar el código.", "error");
   } finally {
     verificando2FA.value = false;
     filaEliminandoId.value = null;
@@ -2198,6 +2159,27 @@ watch(seccionActiva, (newVal) => {
     }, 30000);
   }
 });
+const enviarWhatsAppSoporte = () => {
+  const numero = "593999694629";
+  const nombre = userDrive.value?.name || "(Nombre no disponible)";
+  const correo = userDrive.value?.email || "(Email no disponible)";
+  
+  const mensaje = `Hola. Mi nombre es *${nombre}* y mi correo es *${correo}*.\n\nNo tengo acceso a mi dispositivo Authenticator ni a mi Llave Maestra. Necesito solicitar una Verificación de Identidad para restablecer mi acceso al sistema.\n\nMi IDENTIFICADOR DE SISTEMA es: *${systemId.value}*\n\n¿Podrías ayudarme con el código de rescate?`;
+  const url = `https://wa.me/${numero}?text=${encodeURIComponent(mensaje)}`;
+  openUrl(url);
+};
+
+const enviarEmailSoporte = () => {
+  const emailAdmin = "jhonjairoaraujocacuango@gmail.com";
+  const nombre = userDrive.value?.name || "(Nombre no disponible)";
+  const correo = userDrive.value?.email || "(Email no disponible)";
+  
+  const subject = "Solicitud de Código de Rescate 2FA";
+  const body = `Hola. Mi nombre es ${nombre} y mi correo es ${correo}.\n\nNo tengo acceso a mi dispositivo Authenticator ni a mi Llave Maestra. Necesito solicitar una Verificación de Identidad para restablecer mi acceso al sistema.\n\nMi IDENTIFICADOR DE SISTEMA es: ${systemId.value}\n\n¿Podrías ayudarme con el código de rescate?`;
+  const url = `mailto:${emailAdmin}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  openUrl(url);
+};
+
 const reabrirMain = async () => {
   const existing = await WebviewWindow.getByLabel("main");
 
@@ -3083,24 +3065,81 @@ const reabrirMain = async () => {
             <div class="header-main-title">
               <h1>Sincronización en la Nube</h1>
               <div
-                v-if="loadingDrive"
-                class="sync-live-badge animate-fade-in"
-                title="Sincronizando datos con Google Drive..."
+                class="sync-status"
+                :title="
+                  !authenticatedDrive
+                    ? 'Google Drive no vinculado'
+                    : loadingDrive
+                      ? 'Sincronizando...'
+                      : isDirtyDrive
+                        ? 'Pendiente de sincronizar'
+                        : 'Sincronizado con Drive'
+                "
               >
-                <div class="mini-spinner-blue"></div>
-                Sincronizando...
-              </div>
-              <div v-else class="sync-live-badge success animate-fade-in">
+                <!-- Estado: No autenticado -->
                 <svg
+                  v-if="!authenticatedDrive"
+                  class="sync-icon-status disconnected"
                   viewBox="0 0 24 24"
                   fill="none"
-                  stroke="currentColor"
-                  stroke-width="3"
-                  class="badge-icon"
+                  stroke="#94a3b8"
+                  stroke-width="2.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  style="width: 22px; height: 22px"
                 >
-                  <path d="M20 6L9 17l-5-5" />
+                  <path d="M17.58 19H14a2 2 0 1 1-2-2"></path>
+                  <path d="m2 2 20 20"></path>
+                  <path
+                    d="M10.34 4.46a4 4 0 0 1 7.27 2M21 15a4 4 0 0 0-3-3.87"
+                  ></path>
+                  <path d="M5 15a4 4 0 0 1 5.31-3.75"></path>
                 </svg>
-                Conectado
+                <!-- Estado: Sincronizando (Cargando) -->
+                <svg
+                  v-else-if="loadingDrive"
+                  class="sync-icon-status spin"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="#3b82f6"
+                  stroke-width="2.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  style="width: 22px; height: 22px"
+                >
+                  <polyline points="23 4 23 10 17 10"></polyline>
+                  <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+                </svg>
+                <!-- Estado: Pendiente (Dirty) -->
+                <svg
+                  v-else-if="isDirtyDrive"
+                  class="sync-icon-status pending"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="#f59e0b"
+                  stroke-width="2.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  style="width: 22px; height: 22px"
+                >
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <polyline points="12 6 12 12 16 14"></polyline>
+                </svg>
+                <!-- Estado: Éxito (Sincronizado) -->
+                <svg
+                  v-else
+                  class="sync-icon-status success"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="#10b981"
+                  stroke-width="2.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  style="width: 22px; height: 22px"
+                >
+                  <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                  <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                </svg>
               </div>
             </div>
             <p>
@@ -3275,7 +3314,7 @@ const reabrirMain = async () => {
                 <div class="sync-main-actions">
                   <button
                     class="btn-primary btn-lg"
-                    @click="uploadBackupDrive(true)"
+                    @click="ejecutarBackupManual"
                     :disabled="loadingDrive"
                   >
                     <svg
@@ -3341,11 +3380,11 @@ const reabrirMain = async () => {
                         <td>{{ file.name }}</td>
                         <td>
                           <span class="location-badge">
-                            {{ formatearUbicacionDrive(file.createdTime) }}
+                            {{ formatearUbicacionDrive(file.modifiedTime) }}
                           </span>
                         </td>
                         <td>
-                          {{ new Date(file.createdTime).toLocaleString() }}
+                          {{ new Date(file.modifiedTime).toLocaleString() }}
                         </td>
                         <td>
                           {{ (Number(file.size) / 1024 / 1024).toFixed(2) }} MB
@@ -3612,7 +3651,20 @@ const reabrirMain = async () => {
       </p>
 
       <div class="key-preview-box">
-        <div class="key-icon">📦</div>
+        <div class="key-icon">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <path
+              d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"
+            />
+            <path d="m3.3 7 8.7 5 8.7-5" />
+            <path d="M12 22V12" />
+          </svg>
+        </div>
         <div class="key-status">
           Llave Maestra Generada (Protegida por AES-256)
         </div>
@@ -3620,10 +3672,21 @@ const reabrirMain = async () => {
 
       <div class="modal-actions-vertical">
         <button
-          class="btn-secondary btn-full"
+          class="btn-secondary btn-full btn-with-icon"
           @click="descargarCodigosRecuperacion"
         >
-          📥 Descargar Llave Maestra (.key)
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            class="btn-icon-sm"
+          >
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="7 10 12 15 17 10" />
+            <line x1="12" y1="15" x2="12" y2="3" />
+          </svg>
+          Descargar Llave Maestra (.key)
         </button>
 
         <button
@@ -3635,7 +3698,20 @@ const reabrirMain = async () => {
         </button>
 
         <p v-else class="status-warning-text">
-          ⚠️ Debes descargar el archivo para habilitar la finalización.
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            class="inline-icon-xs"
+          >
+            <path
+              d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"
+            />
+            <line x1="12" y1="9" x2="12" y2="13" />
+            <line x1="12" y1="17" x2="12.01" y2="17" />
+          </svg>
+          Debes descargar el archivo para habilitar la finalización.
         </p>
 
         <div v-if="subiendoADrive" class="drive-status-info">
@@ -3643,7 +3719,16 @@ const reabrirMain = async () => {
           <span>Subiendo copia a Google Drive...</span>
         </div>
         <div v-if="subidaDriveExitosa" class="drive-status-info success">
-          <span>✅ Copia en Google Drive guardada</span>
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="3"
+            class="inline-icon-xs"
+          >
+            <polyline points="20 6 9 17 4 12" />
+          </svg>
+          <span>Copia en Google Drive guardada</span>
         </div>
       </div>
     </div>
@@ -3656,7 +3741,16 @@ const reabrirMain = async () => {
       @drop="handleKeyFileDrop"
     >
       <div class="security-header">
-        <div class="security-icon">🛡️</div>
+        <div class="security-icon">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+          </svg>
+        </div>
         <h3>{{ modalSeguridadTitulo }}</h3>
       </div>
       <p v-html="modalSeguridadMensaje"></p>
@@ -3668,14 +3762,56 @@ const reabrirMain = async () => {
         @dragover.prevent
         @drop.prevent="handleKeyFileDrop"
       >
-        <span v-if="verificando2FA">📦 Leyendo Llave Maestra...</span>
+        <span v-if="verificando2FA">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            class="spin inline-icon-sm"
+          >
+            <path
+              d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"
+            />
+            <path d="M12 6v6l4 2" />
+          </svg>
+          Leyendo Llave Maestra...
+        </span>
         <span
           v-else-if="llaveValidada"
-          style="color: #059669; font-weight: 700"
+          style="
+            color: #059669;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+          "
         >
-          ✅ Llave Maestra Validada
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="3"
+            style="width: 18px; height: 18px"
+          >
+            <polyline points="20 6 9 17 4 12" />
+          </svg>
+          Llave Maestra Validada
         </span>
-        <span v-else>📦 Importar Llave Maestra (.key)</span>
+        <span v-else style="display: flex; align-items: center; gap: 8px">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            style="width: 20px; height: 20px"
+          >
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="17 8 12 3 7 8" />
+            <line x1="12" y1="3" x2="12" y2="15" />
+          </svg>
+          Importar Llave Maestra (.key)
+        </span>
       </div>
 
       <div v-if="llaveValidada" class="validation-success-info animate-fade-in">
@@ -3708,8 +3844,55 @@ const reabrirMain = async () => {
         </button>
 
         <div v-if="showSupportMode" class="support-details animate-fade-in">
-          <p>Envía este ID al administrador para recibir un código de reset:</p>
+          <p class="text-sm">
+            Envía tu Identificador al administrador para recibir un código de
+            reset:
+          </p>
           <div class="system-id-badge">{{ systemId }}</div>
+
+          <div class="support-contact-card">
+            <h4>Ponte en contacto</h4>
+            <div class="contact-info-row">
+              <span class="contact-label">WhatsApp:</span>
+              <span class="contact-value">0999694629</span>
+            </div>
+            <div class="contact-info-row">
+              <span class="contact-label">Correo:</span>
+              <span class="contact-value text-xs"
+                >jhonjairoaraujocacuango@gmail.com</span
+              >
+            </div>
+
+            <div class="support-contact-options">
+              <button class="btn-support-wa" @click="enviarWhatsAppSoporte">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                  class="btn-icon-xs"
+                >
+                  <path
+                    d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z"
+                  />
+                </svg>
+                Enviar Mensaje
+              </button>
+              <button class="btn-support-mail" @click="enviarEmailSoporte">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  class="btn-icon-xs"
+                >
+                  <path
+                    d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"
+                  ></path>
+                  <polyline points="22,6 12,13 2,6"></polyline>
+                </svg>
+                Enviar Correo
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -3738,7 +3921,18 @@ const reabrirMain = async () => {
       class="modal-box danger-modal animate-fade-in"
       style="max-width: 420px; text-align: center; padding: 40px"
     >
-      <div class="modal-header-icon-danger" style="font-size: 56px">🚫</div>
+      <div class="modal-header-icon-danger">
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          style="width: 64px; height: 64px"
+        >
+          <circle cx="12" cy="12" r="10" />
+          <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
+        </svg>
+      </div>
       <h3
         style="
           text-align: center;
@@ -3847,6 +4041,98 @@ const reabrirMain = async () => {
       </div>
     </div>
   </div>
+
+  <!-- MODAL PREMIUM: RESPALDO DE LLAVE MAESTRA -->
+  <Transition name="fade">
+    <div v-if="showMasterKeyUploadModal" class="modal-overlay">
+      <div class="modal-content premium-dialog animate-scale-in">
+        <div class="modal-header-premium">
+          <div class="modal-icon-wrapper blue">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="17 8 12 3 7 8" />
+              <line x1="12" y1="3" x2="12" y2="15" />
+            </svg>
+          </div>
+          <h3>Copia en la Nube</h3>
+        </div>
+
+        <div class="modal-body">
+          <p class="text-center">
+            La Llave Maestra se ha guardado en tu PC. <br />
+            <strong
+              >¿Deseas subir una copia cifrada a tu Google Drive para mayor
+              seguridad?</strong
+            >
+          </p>
+          <p class="text-muted text-sm text-center">
+            Esto te permitirá recuperar tu cuenta incluso si pierdes el archivo
+            en este equipo.
+          </p>
+        </div>
+
+        <div class="modal-footer">
+          <button
+            class="btn-secondary"
+            @click="cancelarSubidaLlave"
+            :disabled="subiendoLlaveADrive"
+          >
+            No, solo en PC
+          </button>
+          <button
+            class="btn-primary"
+            @click="confirmarSubidaLlave"
+            :disabled="subiendoLlaveADrive"
+          >
+            <span v-if="subiendoLlaveADrive" class="mini-spinner"></span>
+            {{ subiendoLlaveADrive ? "Subiendo..." : "Sí, subir a Drive" }}
+          </button>
+        </div>
+      </div>
+    </div>
+  </Transition>
+
+  <!-- SISTEMA DE TOAST PREMIUM -->
+  <Transition name="toast">
+    <div
+      v-if="toast.show"
+      class="toast-container"
+      :class="[toast.type, { dragging: draggingToast }]"
+      :style="{ transform: `translateY(${toastY}px)` }"
+      @mousedown="handleToastMouseDown"
+    >
+      <div class="toast-swipe-indicator"></div>
+      <div class="toast-icon">
+        <svg
+          v-if="toast.type === 'success'"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="3"
+        >
+          <polyline points="20 6 9 17 4 12" />
+        </svg>
+        <svg
+          v-else-if="toast.type === 'error'"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="3"
+        >
+          <line x1="18" y1="6" x2="6" y2="18" />
+          <line x1="6" y1="6" x2="18" y2="18" />
+        </svg>
+      </div>
+      <div class="toast-content">
+        {{ toast.message }}
+      </div>
+    </div>
+  </Transition>
 </template>
 
 <style scoped>
@@ -5142,6 +5428,28 @@ const reabrirMain = async () => {
 .btn-icon-sm {
   width: 18px;
   height: 18px;
+  flex-shrink: 0;
+}
+
+.btn-with-icon {
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.inline-icon-xs {
+  width: 14px;
+  height: 14px;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.inline-icon-sm {
+  width: 18px;
+  height: 18px;
+  display: inline-block;
+  vertical-align: middle;
 }
 
 .svg-inline-icon {
@@ -5611,5 +5919,302 @@ const reabrirMain = async () => {
 
 .btn-full:hover {
   background: #059669 !important;
+}
+/* --- TOAST STYLES PREMIUM --- */
+.toast-container {
+  position: fixed;
+  bottom: 30px;
+  right: 30px;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 24px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.12);
+  border: 1px solid rgba(0, 0, 0, 0.05);
+  max-width: 400px;
+  cursor: grab;
+  user-select: none;
+  transition: transform 0.1s ease-out;
+}
+
+.toast-container.dragging {
+  transition: none;
+  cursor: grabbing;
+  box-shadow: 0 15px 50px rgba(0, 0, 0, 0.15);
+}
+
+.toast-swipe-indicator {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 30px;
+  height: 4px;
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 2px;
+}
+.toast-container.success {
+  border-left: 5px solid #10b981;
+}
+.toast-container.error {
+  border-left: 5px solid #ef4444;
+}
+.toast-icon {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.toast-container.success .toast-icon {
+  color: #10b981;
+}
+.toast-container.error .toast-icon {
+  color: #ef4444;
+}
+.toast-content {
+  color: #1f2937;
+  font-size: 14px;
+  font-weight: 600;
+}
+.toast-enter-active,
+.toast-leave-active {
+  transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+.toast-enter-from {
+  opacity: 0;
+  transform: translate(30px, 0) scale(0.9);
+}
+.toast-leave-to {
+  opacity: 0;
+  transform: translate(0, 20px) scale(0.9);
+}
+/* --- PREMIUM MODAL STYLES --- */
+.premium-dialog {
+  background: #ffffff;
+  border-radius: 20px;
+  width: 100%;
+  max-width: 460px;
+  overflow: hidden;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.8);
+}
+
+.modal-header-premium {
+  padding: 30px 30px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 15px;
+}
+
+.modal-icon-wrapper {
+  width: 60px;
+  height: 60px;
+  border-radius: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 5px;
+}
+
+.modal-icon-wrapper.blue {
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.modal-icon-wrapper svg {
+  width: 32px;
+  height: 32px;
+}
+
+.modal-header-premium h3 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 800;
+  color: #1f2937;
+}
+
+.modal-body {
+  padding: 20px 30px;
+}
+
+.modal-footer {
+  padding: 20px 30px 30px;
+  display: flex;
+  gap: 12px;
+}
+
+.modal-footer button {
+  flex: 1;
+  padding: 12px;
+  font-size: 15px;
+  font-weight: 700;
+  border-radius: 12px;
+}
+
+.text-center {
+  text-align: center;
+}
+.text-muted {
+  color: #6b7280;
+}
+.text-sm {
+  font-size: 13px;
+}
+
+.animate-scale-in {
+  animation: scaleIn 0.3s cubic-bezier(0.165, 0.84, 0.44, 1);
+}
+
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.mini-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 8px;
+  vertical-align: middle;
+  animation: spin 0.8s linear infinite;
+}
+
+/* --- MONITOR DE SINCRONIZACIÓN (V3 Flash) --- */
+.sync-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  background: #ffffff;
+  cursor: help;
+  transition: all 0.2s ease;
+}
+
+.sync-status:hover {
+  background: #f8fafc;
+  border-color: #94a3b8;
+}
+
+.sync-icon-status {
+  width: 22px;
+  height: 22px;
+}
+
+.sync-icon-status.spin {
+  animation: spin-cloud 2s linear infinite;
+}
+
+.sync-icon-status.pending {
+  filter: drop-shadow(0 0 3px rgba(245, 158, 11, 0.4));
+}
+
+.sync-icon-status.disconnected {
+  opacity: 0.5;
+}
+
+.sync-icon-status.success {
+  filter: drop-shadow(0 0 3px rgba(16, 185, 129, 0.4));
+}
+
+@keyframes spin-cloud {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.support-contact-options {
+  display: flex;
+  gap: 10px;
+  margin-top: 15px;
+  justify-content: center;
+}
+
+.support-contact-card {
+  margin-top: 15px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 16px;
+  text-align: left;
+}
+
+.support-contact-card h4 {
+  margin: 0 0 10px;
+  font-size: 14px;
+  color: #1e293b;
+  text-align: center;
+}
+
+.contact-info-row {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+
+.contact-label {
+  color: #64748b;
+  font-weight: 500;
+}
+
+.contact-value {
+  color: #1e293b;
+  font-weight: 700;
+}
+
+.text-xs {
+  font-size: 11px;
+}
+
+.btn-support-wa,
+.btn-support-mail {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  border: none;
+  transition: transform 0.2s;
+}
+
+.btn-support-wa {
+  background: #25d366;
+  color: #fff;
+}
+
+.btn-support-mail {
+  background: #3b82f6;
+  color: #fff;
+}
+
+.btn-support-wa:hover,
+.btn-support-mail:hover {
+  transform: translateY(-2px);
+  filter: brightness(1.1);
 }
 </style>

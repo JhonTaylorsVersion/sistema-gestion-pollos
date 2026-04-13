@@ -1,10 +1,11 @@
 import { ref, onMounted, computed } from "vue";
 
 import { invoke } from "@tauri-apps/api/core";
-import { ask, message } from "@tauri-apps/plugin-dialog";
+import { ask } from "@tauri-apps/plugin-dialog";
 import { fetch } from "@tauri-apps/plugin-http";
 import { readFile, writeFile } from "@tauri-apps/plugin-fs";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { useNotify } from "./useNotify";
 
 export interface GoogleUser {
   name: string;
@@ -15,7 +16,7 @@ export interface GoogleUser {
 export interface DriveFile {
   id: string;
   name: string;
-  createdTime: string;
+  modifiedTime: string; // Cambiado de createdTime a modifiedTime
   size: string;
 }
 
@@ -48,6 +49,8 @@ console.log(
 );
 
 export function useDrive() {
+  const { mostrarToast } = useNotify();
+
   const login = async (force: boolean = false) => {
     // 🛡️ GUARDIA: Si ya hay un login en curso, no permitir otro para evitar conflictos de puertos
     if (loading.value) {
@@ -96,12 +99,9 @@ export function useDrive() {
       return false;
     } catch (error) {
       console.error("Login Error:", error);
-      await message(
+      mostrarToast(
         "Error al iniciar sesión con Google. Por favor, verifica tu conexión o intenta de nuevo.",
-        {
-          title: "Error de Conexión",
-          kind: "error",
-        },
+        "error"
       );
       return false;
     } finally {
@@ -208,7 +208,7 @@ export function useDrive() {
       // IMPORTANTE: Codificamos el query para evitar errores de interpretación (espacios -> %20)
       const query = "name contains 'pollos_backup_' and trashed = false";
       const response = await fetchWithAuth(
-        `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&orderBy=createdTime desc&fields=files(id, name, createdTime, size)`,
+        `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&orderBy=modifiedTime desc&fields=files(id, name, modifiedTime, size)`,
       );
       const data = (await response.json()) as any;
       backups.value = data.files || [];
@@ -310,20 +310,19 @@ export function useDrive() {
     }
   };
 
-  const findTodayBackup = async (fileName: string, parentId?: string) => {
-    if (dailyFileId.value) return dailyFileId.value;
-
+  const findTodayBackup = async (datePrefix: string, parentId?: string) => {
     try {
-      let query = `name = '${fileName}' and trashed = false`;
+      // Buscamos cualquier archivo que EMPIECE con el prefijo de hoy
+      let query = `name contains '${datePrefix}' and trashed = false`;
       if (parentId) query += ` and '${parentId}' in parents`;
 
       const response = await fetchWithAuth(
-        `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id)`,
+        `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id, name)`,
       );
       const data = (await response.json()) as any;
       if (data.files && data.files.length > 0) {
-        dailyFileId.value = data.files[0].id;
-        return dailyFileId.value;
+        // Devolvemos el ID del primer encuentro para hoy
+        return data.files[0].id;
       }
     } catch (e) {
       console.error("Error buscando backup de hoy:", e);
@@ -366,19 +365,32 @@ export function useDrive() {
       const dbPath = await invoke<string>("get_db_path");
       const dbContent = await readFile(dbPath);
 
-      const dateStr = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-      const fileName = `pollos_backup_${dateStr}.db`;
+      const nowObj = new Date();
+      const dateStr = nowObj.toISOString().slice(0, 10); // YYYY-MM-DD
+      const timeStr = nowObj.toLocaleTimeString("es-EC", { hour12: false }).replace(/:/g, "-");
+      
+      const datePrefix = `pollos_backup_${dateStr}`;
+      const newFileName = `${datePrefix}_${timeStr}.db`;
 
-      // Buscamos el archivo preferiblemente dentro de la carpeta del mes
-      const existingId = await findTodayBackup(fileName, folderId || undefined);
+      // Buscamos si ya existe una copia de HOY (sin importar la hora que tenga el nombre)
+      const existingId = await findTodayBackup(datePrefix, folderId || undefined);
 
       let response;
 
       if (existingId) {
-        // ACTUALIZAR (PATCH)
-        console.log(
-          `☁️ Actualizando backup diario en carpeta mensual ID: ${existingId}`,
+        // 1. ACTUALIZAR NOMBRE (Metadata)
+        console.log(`☁️ Renombrando backup de hoy a: ${newFileName}`);
+        await fetchWithAuth(
+          `https://www.googleapis.com/drive/v3/files/${existingId}`,
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: newFileName }),
+          },
         );
+
+        // 2. ACTUALIZAR CONTENIDO (Media)
+        console.log(`☁️ Actualizando contenido de backup diario ID: ${existingId}`);
         response = await fetchWithAuth(
           `https://www.googleapis.com/upload/drive/v3/files/${existingId}?uploadType=media`,
           {
@@ -387,12 +399,10 @@ export function useDrive() {
           },
         );
       } else {
-        // CREAR (POST Multipart) con el parent folder
-        console.log(
-          `☁️ Creando nuevo backup diario en carpeta mensual: ${fileName}`,
-        );
+        // CREAR (POST Multipart)
+        console.log(`☁️ Creando copia inicial para hoy: ${newFileName}`);
         const metadata: any = {
-          name: fileName,
+          name: newFileName,
           mimeType: "application/octet-stream",
         };
         if (folderId) metadata.parents = [folderId];
@@ -423,17 +433,7 @@ export function useDrive() {
         lastAutoUploadTime.value = Date.now();
         isDirty.value = false; // Reset glocal dirty flag
 
-        if (manual) {
-          await message(
-            `Copia de seguridad ${existingId ? "actualizada" : "subida"} con éxito a Google Drive.`,
-            {
-              title: "Backup Exitoso",
-              kind: "info",
-            },
-          );
-        }
         await listBackups();
-        isDirty.value = false; // ✅ ELAVISO DE ENTREGA
         return true;
       } else {
         throw new Error("Fallo en la comunicación con Google Drive.");
@@ -443,10 +443,7 @@ export function useDrive() {
       if (manual) {
         const msg =
           typeof error === "string" ? error : (error as Error).message;
-        await message(`Error al subir copia de seguridad: ${msg}`, {
-          title: "Error de Subida",
-          kind: "error",
-        });
+        mostrarToast(`Error al subir copia de seguridad: ${msg}`, "error");
       }
       return false;
     } finally {
@@ -516,12 +513,9 @@ export function useDrive() {
 
       if (!response.ok) {
         if (response.status === 404) {
-          await message(
+          mostrarToast(
             "El archivo de seguridad ya no existe en Google Drive. Es posible que haya sido eliminado permanentemente desde otro dispositivo.",
-            {
-              title: "Archivo no encontrado",
-              kind: "error",
-            },
+            "error",
           );
           // Aprovechamos para limpiar la lista
           await listBackups(true);
@@ -542,24 +536,18 @@ export function useDrive() {
 
       await writeFile(dbPath, new Uint8Array(content));
 
-      await message(
+      mostrarToast(
         "La base de datos se ha restaurado con éxito. La aplicación se reiniciará ahora para aplicar los cambios.",
-        {
-          title: "Restauración Completada",
-          kind: "info",
-        },
+        "info",
       );
 
       await invoke("restart_app");
     } catch (error) {
       console.error("Restore Error:", error);
       const msg = typeof error === "string" ? error : (error as Error).message;
-      await message(
+      mostrarToast(
         `Error al restaurar: ${msg}\n\nEs posible que la base de datos esté bloqueada por el programa. Intenta cerrar otras ventanas o reinicia la app.`,
-        {
-          title: "Error de Restauración",
-          kind: "error",
-        },
+        "error",
       );
     } finally {
       loading.value = false;
