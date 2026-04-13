@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { invoke } from "@tauri-apps/api/core";
-import { ref, computed, watch } from "vue";
+import { ref, computed, watch, onMounted } from "vue";
 import Database from "@tauri-apps/plugin-sql";
 import ExcelJS from "exceljs";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import JSZip from "jszip";
 import { save, ask, message, open } from "@tauri-apps/plugin-dialog";
-import { writeFile, readFile } from "@tauri-apps/plugin-fs";
+import { writeFile, readFile, remove } from "@tauri-apps/plugin-fs";
 
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useDrive } from "./composables/useDrive";
@@ -204,12 +204,16 @@ const show2FAVerifyModal = ref(false);
 const input2FACode = ref("");
 const verifyTargetFileId = ref<string | null>(null);
 const verificando2FA = ref(false);
+const llaveValidada = ref(false);
+const currentKeyPath = ref<string | null>(null);
 const subSeccionSync = ref<string>("backups");
 const recoveryCodes = ref<string[]>([]);
 const showRecoveryModal = ref(false);
 const haDescargadoCodigos = ref(false);
 const subiendoADrive = ref(false);
 const subidaDriveExitosa = ref(false);
+const showSupportMode = ref(false);
+const systemId = ref("");
 
 const modalSeguridadTitulo = computed(() => {
   return verifyTargetFileId.value === "RESET_2FA_ACTION"
@@ -227,9 +231,10 @@ const cargarConfig2FA = async () => {
   try {
     const database = await initDB();
     const res = await database.select<{ key: string; value: string }[]>(
-      "SELECT key, value FROM app_config WHERE key IN ('2fa_secret', '2fa_recovery_codes', '2fa_confirmed')",
+      "SELECT key, value FROM app_config WHERE key IN ('2fa_secret', '2fa_recovery_codes', '2fa_confirmed', 'system_id')",
     );
 
+    // 2. Extraer valores del 2FA si existen
     if (res && res.length > 0) {
       const secret = res.find((r) => r.key === "2fa_secret")?.value;
       const codesRaw = res.find((r) => r.key === "2fa_recovery_codes")?.value;
@@ -245,6 +250,17 @@ const cargarConfig2FA = async () => {
         showRecoveryModal.value = true;
       }
     }
+
+    // 3. Garantizar que siempre haya un System ID
+    let sid = (res || []).find((r) => r.key === "system_id")?.value;
+    if (!sid) {
+      sid = Math.random().toString(36).substring(2, 8).toUpperCase();
+      await database.execute(
+        "INSERT OR REPLACE INTO app_config (key, value) VALUES ('system_id', ?)",
+        [sid],
+      );
+    }
+    systemId.value = sid;
   } catch (e) {
     console.error("Error al cargar config 2FA:", e);
   }
@@ -359,6 +375,7 @@ const iniciar2FASetup = async () => {
     // Si ya está activo, primero pedimos el código actual para autorizar el cambio
     verifyTargetFileId.value = "RESET_2FA_ACTION"; // Marcador especial
     input2FACode.value = "";
+    llaveValidada.value = false;
     show2FAVerifyModal.value = true;
     return;
   }
@@ -479,6 +496,7 @@ const cargarLlaveMaestra = async () => {
     });
 
     if (filePath && typeof filePath === "string") {
+      currentKeyPath.value = filePath;
       verificando2FA.value = true;
       // Pequeña pausa para que se vea el "Leyendo" si es muy rápido
       await new Promise((r) => setTimeout(r, 500));
@@ -491,18 +509,12 @@ const cargarLlaveMaestra = async () => {
       });
 
       if (isValid) {
-        const proceed = await ask(
-          "Llave Maestra leída y validada correctamente. ¿Deseas continuar con el proceso?",
-          {
-            title: "Validación Exitosa",
-            kind: "info",
-          },
-        );
-
-        if (proceed) {
-          input2FACode.value = recoveryCodes.value[0];
-          await procesarEliminacionCon2FA();
-        }
+        llaveValidada.value = true;
+        input2FACode.value = recoveryCodes.value[0];
+        // Pequeña pausa para que el usuario note el cambio antes de cerrar o proceder
+        await new Promise((r) => setTimeout(r, 800));
+        // Opcionalmente podemos auto-confirmar si queremos, pero mejor dejamos que el usuario vea el cambio
+        // await procesarEliminacionCon2FA();
       } else {
         await message(
           "Esta llave no es válida para este sistema o es de una configuración anterior.",
@@ -532,6 +544,7 @@ const handleKeyFileDrop = async (e: DragEvent) => {
   // En Tauri (web context) el objeto File no tiene la ruta completa por seguridad,
   // pero podemos leerlo como ArrayBuffer y validarlo directamente.
   try {
+    currentKeyPath.value = null; // En drop no tenemos el path absoluto habitualmente
     verificando2FA.value = true;
     const buffer = await file.arrayBuffer();
     const fileContent = new Uint8Array(buffer);
@@ -545,18 +558,9 @@ const handleKeyFileDrop = async (e: DragEvent) => {
     });
 
     if (isValid) {
-      const proceed = await ask(
-        "Llave Maestra detectada y validada. ¿Deseas continuar con el proceso?",
-        {
-          title: "Llave Válida",
-          kind: "info",
-        },
-      );
-
-      if (proceed) {
-        input2FACode.value = recoveryCodes.value[0];
-        await procesarEliminacionCon2FA();
-      }
+      llaveValidada.value = true;
+      input2FACode.value = recoveryCodes.value[0];
+      await new Promise((r) => setTimeout(r, 800));
     } else {
       await message(
         "Este archivo no es una Llave Maestra válida para este sistema.",
@@ -1951,6 +1955,7 @@ const confirmarEliminarBackup = async (fileId: string, fileName: string) => {
 
   verifyTargetFileId.value = fileId;
   input2FACode.value = "";
+  llaveValidada.value = false;
   show2FAVerifyModal.value = true;
 };
 
@@ -1991,12 +1996,82 @@ const procesarEliminacionCon2FA = async () => {
       }
     }
 
+    // --- VALIDACIÓN POR CÓDIGO DE SOPORTE (SISTEMA CRIPTOGRÁFICO) ---
+    if (!isValid && input2FACode.value.trim() !== "") {
+      try {
+        const day = new Date().getDate();
+        const salt = "SOPORTE-POLLOS-VIP-2024-SECRET-KEY"; // CLAVE SECRETA QUE SOLO TÚ CONOCES
+        const msg = `${systemId.value}-${salt}-${day}`;
+
+        const encoder = new TextEncoder();
+        const data = encoder.encode(msg.toUpperCase());
+        const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+        const hashArray = Array.from(new Uint8Array(hashBuffer));
+        const hashHex = hashArray
+          .map((b) => b.toString(16).padStart(2, "0"))
+          .join("");
+
+        // Usamos los primeros 10 caracteres del hash como código de rescate
+        const supportCode = hashHex.substring(0, 10).toUpperCase();
+
+        if (input2FACode.value.toUpperCase() === supportCode) {
+          isValid = true;
+          console.log("🛠️ Acceso de soporte CRIPTOGRÁFICO autorizado");
+        }
+      } catch (err) {
+        console.error("Error en validación criptográfica:", err);
+      }
+    }
+
     if (isValid) {
       if (verifyTargetFileId.value === "RESET_2FA_ACTION") {
         // CASO: RESET DE SEGURIDAD
+        const database = await initDB();
+        await database.execute("DELETE FROM app_config WHERE key = '2fa_secret'");
+        await database.execute(
+          "DELETE FROM app_config WHERE key = '2fa_recovery_codes'",
+        );
+        await database.execute("DELETE FROM app_config WHERE key = '2fa_confirmed'");
+
+        twoFactorSecret.value = null;
+        recoveryCodes.value = [];
+        is2FAConfirmed.value = false;
+
         show2FAVerifyModal.value = false;
         verifyTargetFileId.value = null;
-        generarNuevoQR();
+
+        if (llaveValidada.value) {
+          if (currentKeyPath.value) {
+            const delLlave = await ask(
+              "Esta Llave Maestra ya no será válida para futuras configuraciones. ¿Deseas eliminar el archivo permanentemente de tu equipo?",
+              {
+                title: "Eliminar Llave Inútil",
+                kind: "warning",
+              },
+            );
+            if (delLlave) {
+              try {
+                await remove(currentKeyPath.value);
+              } catch (err) {
+                console.error("Error al eliminar el archivo .key:", err);
+              }
+            }
+          } else {
+            // Caso de Drop (no tenemos el path)
+            await message(
+              "Recuerda eliminar el archivo de la Llave Maestra que usaste, ya que no servirá para futuras configuraciones.",
+              { title: "Aviso de Seguridad", kind: "info" },
+            );
+          }
+        }
+
+        await message(
+          "La vinculación anterior ha sido eliminada. Ahora puedes configurar un nuevo dispositivo desde el panel de seguridad.",
+          {
+            title: "Seguridad Reiniciada",
+            kind: "info",
+          },
+        );
         return;
       }
 
@@ -2038,6 +2113,10 @@ const procesarEliminacionCon2FA = async () => {
 };
 
 let syncInterval: any = null;
+
+onMounted(() => {
+  cargarConfig2FA();
+});
 
 watch(seccionActiva, (newVal) => {
   // Limpiar intervalo anterior si existe
@@ -3344,26 +3423,60 @@ watch(seccionActiva, (newVal) => {
       </div>
       <p v-html="modalSeguridadMensaje"></p>
 
-      <div class="master-key-shortcut" @click="cargarLlaveMaestra">
+      <div
+        class="master-key-shortcut"
+        :class="{ 'success-border': llaveValidada }"
+        @click="cargarLlaveMaestra"
+        @dragover.prevent
+        @drop.prevent="handleKeyFileDrop"
+      >
+        <span v-if="verificando2FA">📦 Leyendo Llave Maestra...</span>
         <span
-          >📦
-          {{
-            verificando2FA
-              ? "Leyendo Llave Maestra..."
-              : "Importar Llave Maestra (.key)"
-          }}</span
+          v-else-if="llaveValidada"
+          style="color: #059669; font-weight: 700"
         >
+          ✅ Llave Maestra Validada
+        </span>
+        <span v-else>📦 Importar Llave Maestra (.key)</span>
+      </div>
+
+      <div v-if="llaveValidada" class="validation-success-info animate-fade-in">
+        <p>
+          La llave ha sido reconocida. El código de seguridad se ha
+          auto-completado. Haz clic en <strong>Confirmar</strong> para
+          continuar.
+        </p>
       </div>
 
       <input
         v-model="input2FACode"
         type="text"
-        maxlength="6"
-        placeholder="000000"
+        :maxlength="showSupportMode ? 20 : 6"
+        :placeholder="showSupportMode ? 'CÓDIGO DE SOPORTE' : '000000'"
         class="totp-input big"
+        :class="{ 'support-active': showSupportMode }"
         @keyup.enter="procesarEliminacionCon2FA"
         autofocus
       />
+
+      <!-- MODAL SOPORTE INFO -->
+      <div v-if="!llaveValidada" class="support-area">
+        <button
+          class="btn-link-sm"
+          @click="showSupportMode = !showSupportMode"
+        >
+          {{
+            showSupportMode
+              ? "Volver a modo normal"
+              : "¿Perdiste tu celular y Llave Maestra?"
+          }}
+        </button>
+
+        <div v-if="showSupportMode" class="support-details animate-fade-in">
+          <p>Envía este ID al administrador para recibir un código de reset:</p>
+          <div class="system-id-badge">{{ systemId }}</div>
+        </div>
+      </div>
 
       <div class="modal-actions">
         <button
@@ -4857,6 +4970,98 @@ watch(seccionActiva, (newVal) => {
   background: #dbeafe;
   color: #1d4ed8;
   transform: translateY(-1px);
+}
+
+.master-key-shortcut.success-border {
+  border: 2px solid #059669;
+  background: #ecfdf5;
+  cursor: default;
+}
+
+.validation-success-info {
+  margin-top: -10px;
+  margin-bottom: 20px;
+  background: #f0fdf4;
+  border-left: 4px solid #059669;
+  padding: 12px 16px;
+  border-radius: 8px;
+  text-align: left;
+}
+
+.validation-success-info p {
+  margin: 0;
+  font-size: 13px;
+  color: #065f46;
+  line-height: 1.5;
+}
+
+.validation-success-info strong {
+  color: #047857;
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-out;
+}
+
+.support-area {
+  margin-top: 5px;
+  margin-bottom: 15px;
+}
+
+.btn-link-sm {
+  background: none;
+  border: none;
+  color: #6366f1;
+  font-size: 12px;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 5px;
+}
+
+.btn-link-sm:hover {
+  color: #4f46e5;
+}
+
+.support-details {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 10px;
+  margin-top: 8px;
+}
+
+.support-details p {
+  font-size: 11px;
+  margin-bottom: 5px !important;
+  color: #64748b;
+}
+
+.system-id-badge {
+  display: inline-block;
+  background: #334155;
+  color: #f8fafc;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-family: monospace;
+  font-weight: 700;
+  font-size: 16px;
+  letter-spacing: 2px;
+}
+
+.totp-input.support-active {
+  border-color: #6366f1;
+  color: #4f46e5;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .key-preview-box {
