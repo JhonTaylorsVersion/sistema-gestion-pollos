@@ -1917,7 +1917,10 @@ const {
   deleteBackup: deleteBackupDrive,
   isAuthenticated: authenticatedDrive,
   isDirty: isDirtyDrive, // Añadido para el indicador de estado
+  isOnline: isOnlineDrive,
+  syncError: syncErrorDrive,
 } = useDrive();
+
 
 const ejecutarBackupManual = async () => {
   const success = await uploadBackupDrive(true);
@@ -3069,11 +3072,17 @@ const reabrirMain = async () => {
                 :title="
                   !authenticatedDrive
                     ? 'Google Drive no vinculado'
-                    : loadingDrive
-                      ? 'Sincronizando...'
-                      : isDirtyDrive
-                        ? 'Pendiente de sincronizar'
-                        : 'Sincronizado con Drive'
+                    : !isOnlineDrive
+                      ? 'Sin conexión a internet (Pausado)'
+                      : (syncErrorDrive && (syncErrorDrive.includes('request for url') || syncErrorDrive.includes('timeout') || syncErrorDrive.includes('network') || syncErrorDrive.includes('offline')))
+                        ? 'Fallo de red (Se reintentará al conectar)'
+                        : syncErrorDrive
+                          ? 'Error de sincronización: ' + syncErrorDrive
+                          : loadingDrive
+                            ? 'Sincronizando...'
+                            : isDirtyDrive
+                              ? 'Pendiente de sincronizar'
+                              : 'Sincronizado con Drive'
                 "
               >
                 <!-- Estado: No autenticado -->
@@ -3090,11 +3099,26 @@ const reabrirMain = async () => {
                 >
                   <path d="M17.58 19H14a2 2 0 1 1-2-2"></path>
                   <path d="m2 2 20 20"></path>
-                  <path
-                    d="M10.34 4.46a4 4 0 0 1 7.27 2M21 15a4 4 0 0 0-3-3.87"
-                  ></path>
+                  <path d="M10.34 4.46a4 4 0 0 1 7.27 2M21 15a4 4 0 0 0-3-3.87"></path>
                   <path d="M5 15a4 4 0 0 1 5.31-3.75"></path>
                 </svg>
+
+                <!-- Estado: Sin Internet o Error de Red (Cloud Offline) -->
+                <svg
+                  v-else-if="!isOnlineDrive || (syncErrorDrive && (syncErrorDrive.includes('request for url') || syncErrorDrive.includes('timeout') || syncErrorDrive.includes('network') || syncErrorDrive.includes('offline')))"
+                  class="sync-icon-status offline"
+                  style="color: #64748b; width: 22px; height: 22px"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="M22.61 16.95A5 5 0 0 0 18 10h-1.26a8 8 0 0 0-7.05-6M5 5a8 8 0 0 0 4 15h9a5 5 0 0 0 1.7-.3"></path>
+                  <line x1="1" y1="1" x2="23" y2="23"></line>
+                </svg>
+
                 <!-- Estado: Sincronizando (Cargando) -->
                 <svg
                   v-else-if="loadingDrive"
@@ -3110,6 +3134,24 @@ const reabrirMain = async () => {
                   <polyline points="23 4 23 10 17 10"></polyline>
                   <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
                 </svg>
+
+                <!-- Estado: Error Crítico de Sincronización (API/Permisos) -->
+                <svg
+                  v-else-if="syncErrorDrive"
+                  class="sync-icon-status error"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="#ef4444"
+                  stroke-width="2.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  style="width: 22px; height: 22px"
+                >
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <line x1="12" y1="8" x2="12" y2="12"></line>
+                  <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                </svg>
+
                 <!-- Estado: Pendiente (Dirty) -->
                 <svg
                   v-else-if="isDirtyDrive"
@@ -3125,6 +3167,7 @@ const reabrirMain = async () => {
                   <circle cx="12" cy="12" r="10"></circle>
                   <polyline points="12 6 12 12 16 14"></polyline>
                 </svg>
+
                 <!-- Estado: Éxito (Sincronizado) -->
                 <svg
                   v-else
@@ -3221,6 +3264,8 @@ const reabrirMain = async () => {
                   <button
                     class="btn-logout-minimal"
                     @click="showLogoutConfirmModal = true"
+                    :disabled="!isOnlineDrive"
+                    :title="!isOnlineDrive ? 'No disponible sin conexión a internet' : 'Cerrar sesión en este dispositivo'"
                   >
                     <svg
                       viewBox="0 0 24 24"
@@ -3235,6 +3280,7 @@ const reabrirMain = async () => {
                     </svg>
                     Cerrar Sesión
                   </button>
+
                 </div>
               </div>
 
@@ -3315,7 +3361,8 @@ const reabrirMain = async () => {
                   <button
                     class="btn-primary btn-lg"
                     @click="ejecutarBackupManual"
-                    :disabled="loadingDrive"
+                    :disabled="loadingDrive || !isOnlineDrive"
+                    :title="!isOnlineDrive ? 'No se pueden subir archivos sin conexión a internet' : 'Crear copia de seguridad en la nube'"
                   >
                     <svg
                       viewBox="0 0 24 24"
@@ -3330,6 +3377,7 @@ const reabrirMain = async () => {
                     </svg>
                     Crear Backup Manual Ahora
                   </button>
+
                 </div>
 
                 <!-- Lista de Backups -->
@@ -3339,9 +3387,10 @@ const reabrirMain = async () => {
                     <button
                       class="btn-icon-only"
                       @click="() => listBackupsDrive()"
-                      title="Actualizar lista"
-                      :disabled="loadingDrive"
+                      :title="!isOnlineDrive ? 'No se puede actualizar sin internet' : 'Actualizar lista'"
+                      :disabled="loadingDrive || !isOnlineDrive"
                     >
+
                       <svg
                         viewBox="0 0 24 24"
                         fill="none"
@@ -3394,11 +3443,13 @@ const reabrirMain = async () => {
                             <button
                               class="btn-danger btn-sm"
                               @click="restoreBackupDrive(file.id)"
-                              :disabled="loadingDrive || eliminandoBackup"
+                              :disabled="loadingDrive || eliminandoBackup || !isOnlineDrive"
                               :title="
-                                loadingDrive
-                                  ? 'Espera a que termine la sincronización'
-                                  : 'Restaurar esta versión'
+                                !isOnlineDrive
+                                  ? 'Se requiere conexión a internet para descargar la copia'
+                                  : loadingDrive
+                                    ? 'Espera a que termine la sincronización'
+                                    : 'Restaurar esta versión'
                               "
                             >
                               Restaurar
@@ -3406,25 +3457,28 @@ const reabrirMain = async () => {
                             <button
                               class="btn-secondary btn-sm btn-delete"
                               :title="
-                                !is2FAEnabled
-                                  ? 'Debes activar la seguridad 2FA primero'
-                                  : loadingDrive
-                                    ? 'Sincronización en curso...'
-                                    : filaEliminandoId === file.id
-                                      ? 'Eliminando...'
-                                      : 'Eliminar permanentemente'
+                                !isOnlineDrive
+                                  ? 'No disponible sin conexión'
+                                  : !is2FAEnabled
+                                    ? 'Debes activar la seguridad 2FA primero'
+                                    : loadingDrive
+                                      ? 'Sincronización en curso...'
+                                      : filaEliminandoId === file.id
+                                        ? 'Eliminando...'
+                                        : 'Eliminar permanentemente'
                               "
                               @click="
                                 confirmarEliminarBackup(file.id, file.name)
                               "
                               :disabled="
                                 loadingDrive ||
+                                !isOnlineDrive ||
                                 (filaEliminandoId &&
                                   filaEliminandoId !== file.id) ||
                                 !is2FAEnabled
                               "
                               :class="{
-                                disabled: !is2FAEnabled || loadingDrive,
+                                disabled: !is2FAEnabled || loadingDrive || !isOnlineDrive,
                               }"
                             >
                               <div

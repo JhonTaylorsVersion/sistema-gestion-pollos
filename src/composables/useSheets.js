@@ -26,7 +26,10 @@ export function useSheets() {
     uploadBackup,
     user: googleUser,
     loading: isCloudLoading,
+    isOnline,
+    syncError,
   } = useDrive();
+
 
   const initDB = async () => {
     if (db) return db;
@@ -104,15 +107,18 @@ export function useSheets() {
     texto: "",
     onConfirm: null,
     textoConfirmar: "Aceptar",
+    textoCancelar: "Cancelar",
     tipo: "normal",
     mostrarEstadoGuardado: false,
   });
+
 
   const abrirConfirmacion = (
     titulo,
     texto,
     onConfirm,
     textoConfirmar = "Aceptar",
+    textoCancelar = "Cancelar",
     tipo = "normal",
     mostrarEstadoGuardado = false,
   ) => {
@@ -122,10 +128,12 @@ export function useSheets() {
       texto,
       onConfirm,
       textoConfirmar,
+      textoCancelar,
       tipo,
       mostrarEstadoGuardado,
     };
   };
+
 
   const confirmarAccion = () => {
     if (modalConfirmacion.value.onConfirm) {
@@ -141,10 +149,12 @@ export function useSheets() {
       texto: "",
       onConfirm: null,
       textoConfirmar: "Aceptar",
+      textoCancelar: "Cancelar",
       tipo: "normal",
       mostrarEstadoGuardado: false,
     };
   };
+
 
   const modalExportacion = ref({
     visible: false,
@@ -3941,6 +3951,9 @@ export function useSheets() {
     loadLatestBatchFromDB,
 
     setTableWrapperRef,
+    isOnline,
+    syncError,
+    abrirConfirmacion,
     pasoExportacion,
     galponesAExportar,
     siguientePasoExportacion,
@@ -3948,3 +3961,5 @@ export function useSheets() {
     toggleTodosGalpones,
   };
 }
+
+

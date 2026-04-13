@@ -42,6 +42,61 @@ const dailyFileId = ref<string | null>(null);
 let deferredTimer: any = null;
 
 export const isDirty = ref(false);
+export const syncError = ref<string | null>(null);
+export const isOnline = ref(window.navigator.onLine);
+
+if (typeof window !== "undefined") {
+  const checkStatus = async () => {
+    // 1. Chequeo rápido del navegador
+    let online = window.navigator.onLine;
+
+    // 2. Si el navegador dice que sí, validamos con un fetch rápido (latido)
+    // Solo si el estado anterior era online, para evitar bucles de fetch si ya sabemos que estamos offline
+    if (online) {
+      try {
+        // Petición ligera solo de cabeceras
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 2000);
+        await window.fetch("https://www.google.com/favicon.ico", {
+          mode: "no-cors",
+          method: "HEAD",
+          signal: controller.signal,
+          cache: "no-store",
+        });
+        clearTimeout(timeoutId);
+        online = true;
+      } catch (e) {
+        // Si el fetch falla, realmente no hay internet funcional
+        online = false;
+      }
+    }
+
+    if (online !== isOnline.value) {
+      console.log(
+        online ? "🌐 Internet detectado (Real)" : "🚫 Internet perdido (Real)",
+      );
+      isOnline.value = online;
+      if (online) syncError.value = null;
+    }
+  };
+
+  window.addEventListener("online", () => {
+    console.log("🌐 Evento Online detectado");
+    checkStatus();
+  });
+
+  window.addEventListener("offline", () => {
+    console.log("🚫 Evento Offline detectado");
+    isOnline.value = false;
+  });
+
+  // Polling de seguridad cada 1.5 segundos por seguridad crítica en backups/restores
+  setInterval(checkStatus, 1500);
+
+
+  // Un check inicial al cargar
+  setTimeout(checkStatus, 1000);
+}
 
 console.log(
   "💿 useDrive.ts: Cargando estado global. Token:",
@@ -101,7 +156,7 @@ export function useDrive() {
       console.error("Login Error:", error);
       mostrarToast(
         "Error al iniciar sesión con Google. Por favor, verifica tu conexión o intenta de nuevo.",
-        "error"
+        "error",
       );
       return false;
     } finally {
@@ -355,6 +410,11 @@ export function useDrive() {
 
     try {
       loading.value = true;
+      syncError.value = null; // Limpiar errores previos al iniciar
+
+      if (!isOnline.value) {
+        throw new Error("Sin conexión a internet");
+      }
 
       // 📂 Asegurar carpetas Raíz -> Año -> Mes
       const folderId = await ensureFolderHierarchy();
@@ -367,13 +427,18 @@ export function useDrive() {
 
       const nowObj = new Date();
       const dateStr = nowObj.toISOString().slice(0, 10); // YYYY-MM-DD
-      const timeStr = nowObj.toLocaleTimeString("es-EC", { hour12: false }).replace(/:/g, "-");
-      
+      const timeStr = nowObj
+        .toLocaleTimeString("es-EC", { hour12: false })
+        .replace(/:/g, "-");
+
       const datePrefix = `pollos_backup_${dateStr}`;
       const newFileName = `${datePrefix}_${timeStr}.db`;
 
       // Buscamos si ya existe una copia de HOY (sin importar la hora que tenga el nombre)
-      const existingId = await findTodayBackup(datePrefix, folderId || undefined);
+      const existingId = await findTodayBackup(
+        datePrefix,
+        folderId || undefined,
+      );
 
       let response;
 
@@ -390,7 +455,9 @@ export function useDrive() {
         );
 
         // 2. ACTUALIZAR CONTENIDO (Media)
-        console.log(`☁️ Actualizando contenido de backup diario ID: ${existingId}`);
+        console.log(
+          `☁️ Actualizando contenido de backup diario ID: ${existingId}`,
+        );
         response = await fetchWithAuth(
           `https://www.googleapis.com/upload/drive/v3/files/${existingId}?uploadType=media`,
           {
@@ -432,6 +499,7 @@ export function useDrive() {
       if (response.ok) {
         lastAutoUploadTime.value = Date.now();
         isDirty.value = false; // Reset glocal dirty flag
+        syncError.value = null; // Clear error on success
 
         await listBackups();
         return true;
@@ -440,9 +508,11 @@ export function useDrive() {
       }
     } catch (error) {
       console.error("Upload Error:", error);
+
+      const msg = typeof error === "string" ? error : (error as Error).message;
+      syncError.value = msg; // Guardar el error para la UI
+
       if (manual) {
-        const msg =
-          typeof error === "string" ? error : (error as Error).message;
         mostrarToast(`Error al subir copia de seguridad: ${msg}`, "error");
       }
       return false;
@@ -534,6 +604,18 @@ export function useDrive() {
 
       const dbPath = await invoke<string>("get_db_path");
 
+      // 🛡️ CREAR BACKUP LOCAL DE EMERGENCIA ANTES DE REEMPLAZAR
+      try {
+        const currentDB = await readFile(dbPath);
+        await writeFile(dbPath + ".bak", currentDB);
+        console.log(
+          "📦 Backup local de emergencia creado en:",
+          dbPath + ".bak",
+        );
+      } catch (e) {
+        console.warn("⚠️ No se pudo crear backup temporal de seguridad:", e);
+      }
+
       await writeFile(dbPath, new Uint8Array(content));
 
       mostrarToast(
@@ -620,5 +702,7 @@ export function useDrive() {
     isAuthenticated: computed(() => !!accessToken.value),
 
     isDirty,
+    syncError,
+    isOnline,
   };
 }

@@ -3,6 +3,10 @@ import { ref, onMounted, onUnmounted, nextTick, watch, watchEffect } from "vue";
 import { useSheets } from "./composables/useSheets";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 
+const isForceClosing = ref(false);
+import { ask } from "@tauri-apps/plugin-dialog";
+
+
 const handleConfigClick = async () => {
   // El panel ahora se abre inmediatamente. La sincronización puede ocurrir en segundo plano.
   const existing = await WebviewWindow.getByLabel("panel-config");
@@ -188,6 +192,9 @@ const {
   exportando,
   isCloudAuth,
   isCloudLoading,
+  isOnline,
+  syncError,
+  abrirConfirmacion,
 } = useSheets();
 
 onMounted(async () => {
@@ -196,6 +203,8 @@ onMounted(async () => {
   // Lógica de Sincronización al cerrar
   const appWindow = getCurrentWindow();
   await appWindow.onCloseRequested(async (event) => {
+    if (isForceClosing.value) return; // Permitir salida si ya se confirmó
+
     if (isDirty.value) {
       console.log(
         "⚠️ Cierre detectado con cambios pendientes. Sincronizando...",
@@ -203,15 +212,41 @@ onMounted(async () => {
       // Detenemos el cierre momentáneamente
       event.preventDefault();
 
-      // Mostramos un mensaje visual si es posible o simplemente forzamos el backup
-      // Al ser un proceso rápido de PATCH, suele tardar menos de 1-2 segundos
-      await uploadBackup(false, true); // force = true para saltar cooldown
+      // Forzar el backup
+      const success = await uploadBackup(false, true);
 
-      // Limpiamos la bandera para evitar bucles y cerramos
-      isDirty.value = false;
-      await appWindow.close();
+      if (success) {
+        isDirty.value = false;
+        await appWindow.close();
+      } else {
+        // En lugar de 'ask' nativo, usamos el modal personalizado de la app
+        abrirConfirmacion(
+          "Fallo de Sincronización",
+          "No se pudo sincronizar la copia de seguridad en la nube (posiblemente por falta de internet).\n\n¿Deseas cerrar el programa de todos modos? Sus cambios están guardados localmente pero NO en Drive.",
+          async () => {
+            isForceClosing.value = true;
+            isDirty.value = false;
+            await appWindow.close();
+          },
+          "Cerrar de todos modos",
+          "Esperar a sincronizar",
+          "danger"
+        );
+
+      }
     }
   });
+
+
+  // 🔄 RECURPERACIÓN AUTOMÁTICA (COLA DE SINCRONIZACIÓN)
+  // Cuando el internet regresa, si hay cambios pendientes, sincronizamos automáticamente.
+  watch(isOnline, async (newOnline) => {
+    if (newOnline && isDirty.value && isCloudAuth.value && !isCloudLoading.value) {
+      console.log("🌐 [Cola Sync] Internet restaurado. Sincronizando cambios pendientes...");
+      await uploadBackup(false);
+    }
+  });
+
 });
 </script>
 
@@ -259,12 +294,21 @@ onMounted(async () => {
           :title="
             !isCloudAuth
               ? 'Google Drive no vinculado'
-              : isCloudLoading
-                ? 'Sincronizando...'
-                : isDirty
-                  ? 'Pendiente de sincronizar'
-                  : 'Sincronizado con Drive'
+              : !isOnline
+                ? 'Sin conexión a internet (Pausado)'
+                : (syncError && (syncError.includes('request for url') || syncError.includes('timeout') || syncError.includes('network') || syncError.includes('offline')))
+                  ? 'Fallo de red (Se reintentará al conectar)'
+                  : syncError
+                    ? 'Error de sincronización: ' + syncError
+                    : isCloudLoading
+                      ? 'Sincronizando...'
+                      : isDirty
+                        ? 'Pendiente de sincronizar'
+                        : 'Sincronizado con Drive'
           "
+
+
+
         >
           <!-- Estado: No autenticado -->
           <svg
@@ -284,6 +328,25 @@ onMounted(async () => {
             ></path>
             <path d="M5 15a4 4 0 0 1 5.31-3.75"></path>
           </svg>
+          <!-- Estado: Sin Internet o Error de Red (Cloud Offline) -->
+          <svg
+            v-else-if="!isOnline || (syncError && (syncError.includes('request for url') || syncError.includes('timeout') || syncError.includes('network') || syncError.includes('offline')))"
+            class="sync-icon-status offline"
+            style="color: #64748b"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M22.61 16.95A5 5 0 0 0 18 10h-1.26a8 8 0 0 0-7.05-6M5 5a8 8 0 0 0 4 15h9a5 5 0 0 0 1.7-.3"></path>
+            <line x1="1" y1="1" x2="23" y2="23"></line>
+          </svg>
+
+
+
+
           <!-- Estado: Sincronizando (Cargando) -->
           <svg
             v-else-if="isCloudLoading"
@@ -298,6 +361,22 @@ onMounted(async () => {
             <polyline points="23 4 23 10 17 10"></polyline>
             <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
           </svg>
+          <!-- Estado: Error Crítico de Sincronización (API/Permisos) -->
+          <svg
+            v-else-if="syncError"
+            class="sync-icon-status error"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="#ef4444"
+            stroke-width="2.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="12" y1="8" x2="12" y2="12"></line>
+            <line x1="12" y1="16" x2="12.01" y2="16"></line>
+          </svg>
+
           <!-- Estado: Pendiente (Dirty) -->
           <svg
             v-else-if="isDirty"
@@ -312,6 +391,8 @@ onMounted(async () => {
             <circle cx="12" cy="12" r="10"></circle>
             <polyline points="12 6 12 12 16 14"></polyline>
           </svg>
+
+
           <!-- Estado: Éxito (Sincronizado) -->
           <svg
             v-else
@@ -1680,8 +1761,9 @@ onMounted(async () => {
       </div>
       <div class="modal-actions">
         <button class="btn-secondary" @click="cerrarConfirmacion">
-          Cancelar
+          {{ modalConfirmacion.textoCancelar }}
         </button>
+
         <button
           :class="[
             modalConfirmacion.tipo === 'danger' ? 'btn-danger' : 'btn-primary',
