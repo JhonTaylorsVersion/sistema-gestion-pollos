@@ -18,10 +18,8 @@ import { useDrive, isDirty } from "./useDrive";
 
 const isInternalAction = ref(false);
 
-
 export function useSheets() {
   let db = null;
-
 
   const {
     isAuthenticated: isCloudAuth,
@@ -30,10 +28,7 @@ export function useSheets() {
     loading: isCloudLoading,
   } = useDrive();
 
-
-
   const initDB = async () => {
-
     if (db) return db;
 
     db = await Database.load("sqlite:pollos.db");
@@ -159,7 +154,7 @@ export function useSheets() {
   const pasoExportacion = ref(1);
   const galponesAExportar = ref([]);
 
-const abrirExportacion = () => {
+  const abrirExportacion = () => {
     pasoExportacion.value = 1;
     // Por defecto, marcamos todos los galpones para exportar
     galponesAExportar.value = sheets.value.map((_, i) => i);
@@ -178,7 +173,10 @@ const abrirExportacion = () => {
   };
 
   const todosGalponesSeleccionados = computed(() => {
-    return sheets.value.length > 0 && galponesAExportar.value.length === sheets.value.length;
+    return (
+      sheets.value.length > 0 &&
+      galponesAExportar.value.length === sheets.value.length
+    );
   });
 
   const toggleTodosGalpones = (e) => {
@@ -350,7 +348,6 @@ const abrirExportacion = () => {
   const ventanaPerdioFoco = ref(false);
   const tablaExpandida = ref(false);
   const tableWrapperRef = ref(null);
-
 
   let fillAutoScrollFrame = null;
 
@@ -1673,7 +1670,7 @@ const abrirExportacion = () => {
     );
   };
 
-const crearExcelBuffer = async () => {
+  const crearExcelBuffer = async () => {
     recalcularTodasLasHojas();
 
     const workbook = new ExcelJS.Workbook();
@@ -1682,7 +1679,9 @@ const crearExcelBuffer = async () => {
     workbook.calcProperties.fullCalcOnLoad = true;
 
     // Filtramos las hojas para exportar solo las que el usuario seleccionó
-    const hojasAExportar = sheets.value.filter((_, i) => galponesAExportar.value.includes(i));
+    const hojasAExportar = sheets.value.filter((_, i) =>
+      galponesAExportar.value.includes(i),
+    );
 
     hojasAExportar.forEach((sheet, index) => {
       // =========================================================
@@ -2156,7 +2155,9 @@ const crearExcelBuffer = async () => {
     const margenX = 10;
 
     // Filtramos las hojas para exportar solo las que el usuario seleccionó
-    const hojasAExportar = sheets.value.filter((_, i) => galponesAExportar.value.includes(i));
+    const hojasAExportar = sheets.value.filter((_, i) =>
+      galponesAExportar.value.includes(i),
+    );
 
     hojasAExportar.forEach((sheet, index) => {
       // =========================================================
@@ -2435,34 +2436,27 @@ const crearExcelBuffer = async () => {
 
     const y = doc.lastAutoTable.finalY + 8;
     doc.setFontSize(11);
-    
-    // Calcular sumas solo con los seleccionados
-    const totalCantidad = statsAExportar.reduce((acc, item) => acc + item.cantidad, 0);
-    const totalAlimento = statsAExportar.reduce((acc, item) => acc + item.alimento, 0);
-    const totalGas = statsAExportar.reduce((acc, item) => acc + item.gas, 0);
-    const totalMortalidad = statsAExportar.reduce((acc, item) => acc + item.mortalidad, 0);
 
-    doc.text(
-      `Total galpones: ${hojasAExportar.length}`,
-      margenX,
-      y,
+    // Calcular sumas solo con los seleccionados
+    const totalCantidad = statsAExportar.reduce(
+      (acc, item) => acc + item.cantidad,
+      0,
     );
-    doc.text(
-      `Total pollos ingresados: ${totalCantidad}`,
-      70,
-      y,
+    const totalAlimento = statsAExportar.reduce(
+      (acc, item) => acc + item.alimento,
+      0,
     );
-    doc.text(
-      `Total alimento: ${totalAlimento}`,
-      145,
-      y,
+    const totalGas = statsAExportar.reduce((acc, item) => acc + item.gas, 0);
+    const totalMortalidad = statsAExportar.reduce(
+      (acc, item) => acc + item.mortalidad,
+      0,
     );
+
+    doc.text(`Total galpones: ${hojasAExportar.length}`, margenX, y);
+    doc.text(`Total pollos ingresados: ${totalCantidad}`, 70, y);
+    doc.text(`Total alimento: ${totalAlimento}`, 145, y);
     doc.text(`Total gas: ${totalGas}`, 210, y);
-    doc.text(
-      `Total mortalidad: ${totalMortalidad}`,
-      260,
-      y,
-    );
+    doc.text(`Total mortalidad: ${totalMortalidad}`, 260, y);
 
     return doc.output("arraybuffer");
   };
@@ -2601,40 +2595,40 @@ const crearExcelBuffer = async () => {
   const loadBatchFromDB = async (conjuntoId) => {
     try {
       const database = await initDB();
-      
+
       // 1. Cargar datos del conjunto
       const conjuntos = await database.select(
         "SELECT * FROM conjuntos WHERE id = ?",
-        [conjuntoId]
+        [conjuntoId],
       );
-      
+
       if (!conjuntos || conjuntos.length === 0) return false;
-      
+
       const c = conjuntos[0];
       conjunto.value = {
         id: c.id,
         nombre: c.nombre,
-        descripcion: c.descripcion || ""
+        descripcion: c.descripcion || "",
       };
 
       // 2. Cargar las hojas (galpones) del conjunto
       const sheetsRows = await database.select(
         "SELECT * FROM sheets WHERE conjunto_id = ? ORDER BY nombre ASC, id ASC",
-        [conjuntoId]
+        [conjuntoId],
       );
 
       if (sheetsRows && sheetsRows.length > 0) {
         const loadedSheets = [];
-        
+
         for (const sRow of sheetsRows) {
           // 3. Cargar las filas de cada hoja
           const filasRows = await database.select(
             "SELECT * FROM filas WHERE sheet_id = ? ORDER BY dia ASC",
-            [sRow.id]
+            [sRow.id],
           );
 
           // Mapeamos de DB a formato de la app
-          const filas = filasRows.map(f => ({
+          const filas = filasRows.map((f) => ({
             id: f.id,
             dia: f.dia,
             semana: f.semana,
@@ -2648,23 +2642,30 @@ const crearExcelBuffer = async () => {
             mortDiaria: f.mort_diaria || "",
             mortAcum: f.mort_acum || "",
             mortPorcentaje: f.mort_porcentaje || "",
-            observacion: f.observacion || ""
+            observacion: f.observacion || "",
           }));
 
           // Si por alguna razón faltan filas, completamos hasta 56 (TOTAL_DIAS)
           if (filas.length < TOTAL_DIAS) {
             const faltantes = TOTAL_DIAS - filas.length;
-            const inicioDia = filas.length > 0 ? filas[filas.length - 1].dia + 1 : 1;
-            for(let i=0; i < faltantes; i++) {
+            const inicioDia =
+              filas.length > 0 ? filas[filas.length - 1].dia + 1 : 1;
+            for (let i = 0; i < faltantes; i++) {
               const d = inicioDia + i;
               filas.push({
                 dia: d,
-                semana: Math.floor((d-1) / 7) + 1,
+                semana: Math.floor((d - 1) / 7) + 1,
                 fecha: "",
-                alimentoCant: "", alimentoDiario: "", alimentoAcum: "",
-                medicina: "", gasDiario: "", gasAcum: "",
-                mortDiaria: "", mortAcum: "", mortPorcentaje: "",
-                observacion: ""
+                alimentoCant: "",
+                alimentoDiario: "",
+                alimentoAcum: "",
+                medicina: "",
+                gasDiario: "",
+                gasAcum: "",
+                mortDiaria: "",
+                mortAcum: "",
+                mortPorcentaje: "",
+                observacion: "",
               });
             }
           }
@@ -2679,9 +2680,9 @@ const crearExcelBuffer = async () => {
               galpon: sRow.galpon || "",
               fechaIngreso: sRow.fecha_ingreso || "",
               procedencia: sRow.procedencia || "",
-              cantidad: sRow.cantidad || ""
+              cantidad: sRow.cantidad || "",
             },
-            filas: filas
+            filas: filas,
           };
 
           // Recalculamos para que todas las tablas de resumen estén listas
@@ -2706,14 +2707,27 @@ const crearExcelBuffer = async () => {
       const database = await initDB();
       // Buscamos el ID del último conjunto creado
       const results = await database.select(
-        "SELECT id FROM conjuntos ORDER BY rowid DESC LIMIT 1"
+        "SELECT id FROM conjuntos ORDER BY rowid DESC LIMIT 1",
       );
-      
+
       if (results && results.length > 0) {
         const lastBatchId = results[0].id;
-        
+
         // --- VALIDACIÓN DE MES/AÑO PARA RENOVACIÓN MENSUAL ---
-        const meses = ["ENE", "FEB", "MAR", "ABR", "MAY", "JUN", "JUL", "AGO", "SEP", "OCT", "NOV", "DIC"];
+        const meses = [
+          "ENE",
+          "FEB",
+          "MAR",
+          "ABR",
+          "MAY",
+          "JUN",
+          "JUL",
+          "AGO",
+          "SEP",
+          "OCT",
+          "NOV",
+          "DIC",
+        ];
         const mesActualStr = meses[new Date().getMonth()];
         const añoActual = new Date().getFullYear();
         const sufijoActual = `${mesActualStr}-${añoActual}`;
@@ -2723,11 +2737,16 @@ const crearExcelBuffer = async () => {
         const sufijoLastBatch = partes.length > 1 ? partes[1] : "";
 
         if (sufijoLastBatch !== sufijoActual) {
-          console.log(`📅 [useSheets] Cambio de mes detectado (${sufijoLastBatch} -> ${sufijoActual}). Iniciando mes limpio.`);
+          console.log(
+            `📅 [useSheets] Cambio de mes detectado (${sufijoLastBatch} -> ${sufijoActual}). Iniciando mes limpio.`,
+          );
           return; // No cargamos, se queda el estado vacío por defecto
         }
 
-        console.log("🔍 [useSheets] Iniciando auto-carga de lote del mes actual:", lastBatchId);
+        console.log(
+          "🔍 [useSheets] Iniciando auto-carga de lote del mes actual:",
+          lastBatchId,
+        );
         const success = await loadBatchFromDB(lastBatchId);
         if (success) {
           console.log("✅ [useSheets] Lote cargado automáticamente con éxito.");
@@ -2740,9 +2759,7 @@ const crearExcelBuffer = async () => {
     }
   };
 
-
   const guardar = async (esManual = false) => {
-
     // Si ya estamos en medio de una acción interna, evitamos redundancia
     if (isInternalAction.value) return;
 
@@ -2834,7 +2851,6 @@ const crearExcelBuffer = async () => {
         }
       }
 
-
       setTimeout(() => {
         if (estadoGuardado.value.tipo.includes("exito")) {
           estadoGuardado.value = { tipo: "idle", mensaje: "" };
@@ -2855,7 +2871,6 @@ const crearExcelBuffer = async () => {
     }
   };
 
-
   // --- LÓGICA DE AUTOGUARDADO Y AUTOCÁLCULO ---
   let timerAutoguardado = null;
 
@@ -2863,7 +2878,7 @@ const crearExcelBuffer = async () => {
     [sheets, conjunto],
     () => {
       if (isInternalAction.value) return; // 🔇 Silenciar si es una acción interna
-      
+
       // Limpiamos el mensaje si el usuario empieza a editar de nuevo
 
       if (estadoGuardado.value.tipo.includes("exito")) {
@@ -2890,8 +2905,6 @@ const crearExcelBuffer = async () => {
     },
     { deep: true },
   );
-
-
 
   const getTotalAlimentoSheet = (sheet) =>
     sheet.filas.reduce(
@@ -3927,7 +3940,6 @@ const crearExcelBuffer = async () => {
     loadBatchFromDB,
     loadLatestBatchFromDB,
 
-
     setTableWrapperRef,
     pasoExportacion,
     galponesAExportar,
@@ -3936,5 +3948,3 @@ const crearExcelBuffer = async () => {
     toggleTodosGalpones,
   };
 }
-
-

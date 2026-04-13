@@ -4,15 +4,7 @@ import { useSheets } from "./composables/useSheets";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 const handleConfigClick = async () => {
-  // --- SEGURIDAD: Sincronizar antes de abrir el panel si hay cambios ---
-  if (isDirty.value) {
-    console.log(
-      "⚠️ Cambios detectados. Forzando sincronización antes de abrir el panel...",
-    );
-    // Usamos el modo manual o forzado para ignorar el cooldown de 30s
-    await uploadBackup(false, true);
-  }
-
+  // El panel ahora se abre inmediatamente. La sincronización puede ocurrir en segundo plano.
   const existing = await WebviewWindow.getByLabel("panel-config");
 
   if (existing) {

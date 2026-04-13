@@ -10,6 +10,7 @@ import { save, ask, message, open } from "@tauri-apps/plugin-dialog";
 import { writeFile, readFile, remove } from "@tauri-apps/plugin-fs";
 
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useDrive } from "./composables/useDrive";
 
 type PdfCell =
@@ -214,17 +215,22 @@ const subiendoADrive = ref(false);
 const subidaDriveExitosa = ref(false);
 const showSupportMode = ref(false);
 const systemId = ref("");
+const showLogoutConfirmModal = ref(false);
 
 const modalSeguridadTitulo = computed(() => {
-  return verifyTargetFileId.value === "RESET_2FA_ACTION"
-    ? "Seguridad: Autorizar Cambio"
-    : "Verificación de Seguridad";
+  if (verifyTargetFileId.value === "RESET_2FA_ACTION")
+    return "Seguridad: Autorizar Cambio";
+  if (verifyTargetFileId.value === "SIGNOUT_DRIVE_ACTION")
+    return "Seguridad: Cerrar Sesión";
+  return "Verificación de Seguridad";
 });
 
 const modalSeguridadMensaje = computed(() => {
-  return verifyTargetFileId.value === "RESET_2FA_ACTION"
-    ? "Para vincular un nuevo celular, ingresa el código actual de tu Authenticator o un código de recuperación."
-    : "Estás intentando eliminar una copia de seguridad permanentemente. Ingresa el código de 6 dígitos de tu Authenticator o un código de recuperación para continuar.";
+  if (verifyTargetFileId.value === "RESET_2FA_ACTION")
+    return "Para vincular un nuevo celular, ingresa el código actual de tu Authenticator o un código de recuperación.";
+  if (verifyTargetFileId.value === "SIGNOUT_DRIVE_ACTION")
+    return "Para desvincular tu cuenta de Google Drive de este equipo, ingresa el código de tu Authenticator.";
+  return "Estás intentando eliminar una copia de seguridad permanentemente. Ingresa el código de 6 dígitos de tu Authenticator o un código de recuperación para continuar.";
 });
 
 const cargarConfig2FA = async () => {
@@ -1938,6 +1944,25 @@ const {
   isAuthenticated: authenticatedDrive,
 } = useDrive();
 
+const iniciarLoginConSeguridad = async () => {
+  try {
+    await loginDrive();
+    // Si se logueó y no está activado 2FA, forzamos el setup
+    if (authenticatedDrive.value && !is2FAConfirmed.value) {
+      await message(
+        "Conexión exitosa. Por políticas de seguridad, es obligatorio configurar tu llave de seguridad y dispositivo Authenticator para proteger tus backups.",
+        {
+          title: "Configuración de Seguridad",
+          kind: "info",
+        },
+      );
+      iniciar2FASetup();
+    }
+  } catch (err) {
+    console.error("Error en login:", err);
+  }
+};
+
 const eliminandoBackup = ref(false);
 
 const confirmarEliminarBackup = async (fileId: string, fileName: string) => {
@@ -1957,6 +1982,18 @@ const confirmarEliminarBackup = async (fileId: string, fileName: string) => {
   input2FACode.value = "";
   llaveValidada.value = false;
   show2FAVerifyModal.value = true;
+};
+
+const solicitarLogout2FA = () => {
+  showLogoutConfirmModal.value = false;
+  if (is2FAEnabled.value) {
+    verifyTargetFileId.value = "SIGNOUT_DRIVE_ACTION";
+    input2FACode.value = "";
+    llaveValidada.value = false;
+    show2FAVerifyModal.value = true;
+  } else {
+    signoutDrive();
+  }
 };
 
 const procesarEliminacionCon2FA = async () => {
@@ -2027,11 +2064,15 @@ const procesarEliminacionCon2FA = async () => {
       if (verifyTargetFileId.value === "RESET_2FA_ACTION") {
         // CASO: RESET DE SEGURIDAD
         const database = await initDB();
-        await database.execute("DELETE FROM app_config WHERE key = '2fa_secret'");
+        await database.execute(
+          "DELETE FROM app_config WHERE key = '2fa_secret'",
+        );
         await database.execute(
           "DELETE FROM app_config WHERE key = '2fa_recovery_codes'",
         );
-        await database.execute("DELETE FROM app_config WHERE key = '2fa_confirmed'");
+        await database.execute(
+          "DELETE FROM app_config WHERE key = '2fa_confirmed'",
+        );
 
         twoFactorSecret.value = null;
         recoveryCodes.value = [];
@@ -2075,10 +2116,23 @@ const procesarEliminacionCon2FA = async () => {
         return;
       }
 
+      // CASO: CERRAR SESIÓN DE DRIVE
+      if (verifyTargetFileId.value === "SIGNOUT_DRIVE_ACTION") {
+        show2FAVerifyModal.value = false;
+        verifyTargetFileId.value = null;
+        await signoutDrive();
+        await message("Sesión de Google Drive cerrada correctamente.", {
+          title: "Éxito",
+          kind: "info",
+        });
+        return;
+      }
+
       // CASO: ELIMINACIÓN DE BACKUP
       const fileId = verifyTargetFileId.value;
 
       show2FAVerifyModal.value = false;
+      verifyTargetFileId.value = null;
 
       filaEliminandoId.value = fileId;
       await deleteBackupDrive(fileId);
@@ -2144,6 +2198,33 @@ watch(seccionActiva, (newVal) => {
     }, 30000);
   }
 });
+const reabrirMain = async () => {
+  const existing = await WebviewWindow.getByLabel("main");
+
+  if (existing) {
+    // Si la ventana está minimizada, la restauramos
+    await existing.unminimize();
+    // La mostramos (por si estaba oculta)
+    await existing.show();
+    // Técnica de enfoque forzado: traer al frente con alwaysOnTop momentáneo
+    await existing.setAlwaysOnTop(true);
+    await existing.setAlwaysOnTop(false);
+    // Finalmente le damos el foco
+    await existing.setFocus();
+  } else {
+    const win = new WebviewWindow("main", {
+      title: "Sistema Gestión Pollos",
+      width: 800,
+      height: 600,
+      resizable: true,
+      center: true,
+    });
+
+    win.once("tauri://created", () => {
+      console.log("✅ Ventana principal re-abierta");
+    });
+  }
+};
 </script>
 
 <template>
@@ -2198,6 +2279,21 @@ watch(seccionActiva, (newVal) => {
           @click="cambiarSeccion('sincronizacion')"
         >
           Sincronización
+        </button>
+
+        <div class="sidebar-divider"></div>
+
+        <button class="sidebar-btn-back" @click="reabrirMain">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.5"
+            class="btn-icon-sm"
+          >
+            <polyline points="15 18 9 12 15 6" />
+          </svg>
+          Volver al Sistema
         </button>
 
         <button class="sidebar-btn" @click="cerrarSesion">Cerrar sesión</button>
@@ -2984,7 +3080,29 @@ watch(seccionActiva, (newVal) => {
 
         <template v-if="seccionActiva === 'sincronizacion'">
           <div class="dashboard-header">
-            <h1>Sincronización en la Nube</h1>
+            <div class="header-main-title">
+              <h1>Sincronización en la Nube</h1>
+              <div
+                v-if="loadingDrive"
+                class="sync-live-badge animate-fade-in"
+                title="Sincronizando datos con Google Drive..."
+              >
+                <div class="mini-spinner-blue"></div>
+                Sincronizando...
+              </div>
+              <div v-else class="sync-live-badge success animate-fade-in">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="3"
+                  class="badge-icon"
+                >
+                  <path d="M20 6L9 17l-5-5" />
+                </svg>
+                Conectado
+              </div>
+            </div>
             <p>
               Respalda tu información en Google Drive y restáurala cuando la
               necesites.
@@ -3011,9 +3129,26 @@ watch(seccionActiva, (newVal) => {
                 Debes vincular tu cuenta para habilitar los respaldos
                 automáticos y manuales.
               </p>
+              <div class="login-security-notice">
+                <span class="warning-icon-small">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    class="svg-inline-icon"
+                  >
+                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                  </svg>
+                </span>
+                <p>
+                  <strong>Importante:</strong> Al iniciar sesión, se te pedirá
+                  configurar un Authenticator por seguridad obligatoria.
+                </p>
+              </div>
               <button
                 class="btn-primary"
-                @click="() => loginDrive()"
+                @click="iniciarLoginConSeguridad"
                 :disabled="loadingDrive"
               >
                 {{
@@ -3023,6 +3158,49 @@ watch(seccionActiva, (newVal) => {
             </div>
 
             <div v-else class="sync-layout">
+              <!-- Perfil de Usuario Premium (Centrado y Vertical) -->
+              <div class="sync-profile-standalone animate-fade-in">
+                <div class="avatar-large-wrapper">
+                  <img
+                    v-if="userDrive?.picture"
+                    :src="userDrive.picture"
+                    class="user-avatar-hero"
+                    referrerpolicy="no-referrer"
+                  />
+                  <div class="google-hero-badge">
+                    <img
+                      src="https://www.gstatic.com/images/branding/product/1x/drive_2020q4_48dp.png"
+                      alt="Google Drive"
+                    />
+                  </div>
+                </div>
+                <div class="user-hero-text">
+                  <h2 class="user-hero-name">
+                    {{ userDrive?.name || "Usuario" }}
+                  </h2>
+                  <p class="user-hero-email">{{ userDrive?.email }}</p>
+                  <button
+                    class="btn-logout-minimal"
+                    @click="showLogoutConfirmModal = true"
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      class="btn-icon-sm"
+                    >
+                      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                      <polyline points="16 17 21 12 16 7" />
+                      <line x1="21" y1="12" x2="9" y2="12" />
+                    </svg>
+                    Cerrar Sesión
+                  </button>
+                </div>
+              </div>
+
+              <!-- Sub-pestañas de Sincronización -->
+
               <!-- Sub-pestañas de Sincronización -->
               <div class="sync-tabs">
                 <button
@@ -3030,14 +3208,36 @@ watch(seccionActiva, (newVal) => {
                   :class="{ active: subSeccionSync === 'backups' }"
                   @click="subSeccionSync = 'backups'"
                 >
-                  📦 Mis Backups
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    class="tab-icon"
+                  >
+                    <path
+                      d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"
+                    />
+                    <path d="m3.3 7 8.7 5 8.7-5" />
+                    <path d="M12 22V12" />
+                  </svg>
+                  Mis Backups
                 </button>
                 <button
                   class="sync-tab-btn"
                   :class="{ active: subSeccionSync === 'seguridad' }"
                   @click="subSeccionSync = 'seguridad'"
                 >
-                  🛡️ Seguridad 2FA
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    class="tab-icon"
+                  >
+                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                  </svg>
+                  Seguridad 2FA
                 </button>
               </div>
 
@@ -3048,30 +3248,26 @@ watch(seccionActiva, (newVal) => {
               >
                 <!-- Banner de advertencia si no hay 2FA -->
                 <div v-if="!is2FAEnabled" class="security-warning-banner">
-                  <div class="warning-icon">⚠️</div>
+                  <div class="warning-icon">
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      class="icon-md"
+                    >
+                      <path
+                        d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"
+                      />
+                      <path d="M12 9v4" />
+                      <path d="M12 17h.01" />
+                    </svg>
+                  </div>
                   <div class="warning-text">
                     <strong>Seguridad Desactivada:</strong> Por protección de
                     tus datos, la función de <strong>borrar</strong> está
                     bloqueada hasta que actives el Authenticator en la pestaña
                     de Seguridad.
-                  </div>
-                </div>
-
-                <!-- Perfil de Usuario Compacto -->
-                <div class="sync-card profile-mini">
-                  <div class="user-info-container-mini">
-                    <img
-                      v-if="userDrive?.picture"
-                      :src="userDrive.picture"
-                      class="user-avatar-mini"
-                      referrerpolicy="no-referrer"
-                    />
-                    <div class="user-details-mini">
-                      <p class="user-name-mini">
-                        {{ userDrive?.name || "Usuario" }}
-                      </p>
-                      <p class="user-email-mini">{{ userDrive?.email }}</p>
-                    </div>
                   </div>
                 </div>
 
@@ -3160,6 +3356,11 @@ watch(seccionActiva, (newVal) => {
                               class="btn-danger btn-sm"
                               @click="restoreBackupDrive(file.id)"
                               :disabled="loadingDrive || eliminandoBackup"
+                              :title="
+                                loadingDrive
+                                  ? 'Espera a que termine la sincronización'
+                                  : 'Restaurar esta versión'
+                              "
                             >
                               Restaurar
                             </button>
@@ -3168,9 +3369,11 @@ watch(seccionActiva, (newVal) => {
                               :title="
                                 !is2FAEnabled
                                   ? 'Debes activar la seguridad 2FA primero'
-                                  : filaEliminandoId === file.id
-                                    ? 'Eliminando...'
-                                    : 'Eliminar permanentemente'
+                                  : loadingDrive
+                                    ? 'Sincronización en curso...'
+                                    : filaEliminandoId === file.id
+                                      ? 'Eliminando...'
+                                      : 'Eliminar permanentemente'
                               "
                               @click="
                                 confirmarEliminarBackup(file.id, file.name)
@@ -3181,7 +3384,9 @@ watch(seccionActiva, (newVal) => {
                                   filaEliminandoId !== file.id) ||
                                 !is2FAEnabled
                               "
-                              :class="{ disabled: !is2FAEnabled }"
+                              :class="{
+                                disabled: !is2FAEnabled || loadingDrive,
+                              }"
                             >
                               <div
                                 v-if="filaEliminandoId === file.id"
@@ -3215,8 +3420,32 @@ watch(seccionActiva, (newVal) => {
                 class="sync-main-content"
               >
                 <div class="sync-card security-config-card">
-                  <div class="security-hero-icon">
-                    {{ is2FAEnabled ? "🛡️" : "🔒" }}
+                  <div
+                    class="security-hero-icon"
+                    :class="{ secure: is2FAEnabled }"
+                  >
+                    <svg
+                      v-if="is2FAEnabled"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      class="hero-svg"
+                    >
+                      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                      <path d="m9 12 2 2 4-4" />
+                    </svg>
+                    <svg
+                      v-else
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      class="hero-svg"
+                    >
+                      <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
+                      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                    </svg>
                   </div>
                   <h2>Protección de Datos con Authenticator</h2>
                   <p v-if="!is2FAEnabled">
@@ -3256,17 +3485,6 @@ watch(seccionActiva, (newVal) => {
                   </div>
                 </div>
 
-                <div class="sync-card danger-zone">
-                  <h3>Cerrar Sesión de Drive</h3>
-                  <p>
-                    Si desvinculas la cuenta, todas las funciones de nube se
-                    desactivarán.
-                  </p>
-                  <button class="btn-unlink-big" @click="signoutDrive">
-                    Cerrar Sesión en Google Drive
-                  </button>
-                </div>
-
                 <!-- --- BOTÓN DE EMERGENCIA (BORRAR DESPUÉS DE USAR) --- -->
                 <div
                   class="sync-card emergency-zone"
@@ -3276,8 +3494,28 @@ watch(seccionActiva, (newVal) => {
                     background: #fff1f2;
                   "
                 >
-                  <h3 style="color: #b91c1c">
-                    🚨 ZONA DE EMERGENCIA (DESARROLLO)
+                  <h3
+                    style="
+                      color: #b91c1c;
+                      display: flex;
+                      align-items: center;
+                      gap: 8px;
+                    "
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      style="width: 20px; height: 20px"
+                    >
+                      <path
+                        d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"
+                      />
+                      <path d="M12 9v4" />
+                      <path d="M12 17h.01" />
+                    </svg>
+                    ZONA DE EMERGENCIA (DESARROLLO)
                   </h3>
                   <p style="color: #7f1d1d; font-size: 13px">
                     Usa esto SOLO si perdiste el celular y NO tienes códigos de
@@ -3461,10 +3699,7 @@ watch(seccionActiva, (newVal) => {
 
       <!-- MODAL SOPORTE INFO -->
       <div v-if="!llaveValidada" class="support-area">
-        <button
-          class="btn-link-sm"
-          @click="showSupportMode = !showSupportMode"
-        >
+        <button class="btn-link-sm" @click="showSupportMode = !showSupportMode">
           {{
             showSupportMode
               ? "Volver a modo normal"
@@ -3492,6 +3727,41 @@ watch(seccionActiva, (newVal) => {
           :disabled="verificando2FA || input2FACode.length < 6"
         >
           {{ verificando2FA ? "Verificando..." : "Confirmar Borrado" }}
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL DE CONFIRMACIÓN DE CIERRE DE SESIÓN -->
+  <div v-if="showLogoutConfirmModal" class="modal-overlay">
+    <div
+      class="modal-box danger-modal animate-fade-in"
+      style="max-width: 420px; text-align: center; padding: 40px"
+    >
+      <div class="modal-header-icon-danger" style="font-size: 56px">🚫</div>
+      <h3
+        style="
+          text-align: center;
+          margin-top: 0;
+          margin-bottom: 12px;
+          font-size: 24px;
+        "
+      >
+        Cerrar Sesión de Drive
+      </h3>
+      <p style="text-align: center; color: #64748b; margin-bottom: 24px">
+        Si desvinculas la cuenta, todas las funciones de nube se desactivarán.
+      </p>
+
+      <div class="modal-actions-vertical">
+        <button class="btn-unlink-full" @click="solicitarLogout2FA">
+          Cerrar Sesión en Google Drive
+        </button>
+        <button
+          class="btn-cancel-modal"
+          @click="showLogoutConfirmModal = false"
+        >
+          Cancelar
         </button>
       </div>
     </div>
@@ -4422,6 +4692,30 @@ watch(seccionActiva, (newVal) => {
   max-width: 320px;
 }
 
+.login-security-notice {
+  margin: 15px 0 25px 0;
+  padding: 12px 18px;
+  background: #f0f9ff;
+  border-radius: 12px;
+  border: 1px solid #bae6fd;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 400px;
+}
+
+.login-security-notice p {
+  margin: 0 !important;
+  font-size: 13px !important;
+  color: #0369a1 !important;
+  line-height: 1.4;
+  text-align: left !important;
+}
+
+.warning-icon-small {
+  font-size: 20px;
+}
+
 .sync-layout {
   display: flex;
   flex-direction: column;
@@ -4759,6 +5053,128 @@ watch(seccionActiva, (newVal) => {
   padding-bottom: 10px;
 }
 
+.header-main-title {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  flex-wrap: wrap;
+}
+
+.sync-live-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  background: #eff6ff;
+  color: #2563eb;
+  border-radius: 99px;
+  font-size: 13px;
+  font-weight: 700;
+  border: 1px solid #dbeafe;
+}
+
+.sync-live-badge.success {
+  background: #ecfdf5;
+  color: #059669;
+  border-color: #d1fae5;
+}
+
+.badge-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.mini-spinner-blue {
+  width: 14px;
+  height: 14px;
+  border: 2px solid #2563eb22;
+  border-top-color: #2563eb;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.sidebar-divider {
+  margin: 15px 0;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.sidebar-btn-back {
+  width: 100%;
+  padding: 12px 15px;
+  border: none;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #94a3b8;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  transition: all 0.2s ease;
+  margin-top: auto;
+}
+
+.sidebar-btn-back:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: white;
+}
+
+.btn-logout-minimal {
+  margin: 24px auto 0 auto;
+  background: white;
+  color: #ef4444;
+  border: 1px solid #fee2e2;
+  padding: 10px 24px;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  box-shadow: 0 4px 10px -2px rgba(220, 38, 38, 0.05);
+}
+
+.btn-icon-sm {
+  width: 18px;
+  height: 18px;
+}
+
+.svg-inline-icon {
+  width: 100%;
+  height: 100%;
+}
+
+.tab-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.icon-md {
+  width: 24px;
+  height: 24px;
+}
+
+.hero-svg {
+  width: 64px;
+  height: 64px;
+}
+
+.security-hero-icon.secure {
+  color: #10b981;
+}
+
+.btn-logout-minimal:hover {
+  background: #fef2f2;
+  border-color: #fecaca;
+  transform: translateY(-2px);
+  box-shadow: 0 8px 15px -3px rgba(220, 38, 38, 0.1);
+}
+
 .sync-tab-btn {
   padding: 10px 20px;
   border: none;
@@ -4795,33 +5211,105 @@ watch(seccionActiva, (newVal) => {
   color: #b45309;
 }
 
-.profile-mini {
-  padding: 12px !important;
+.sync-profile-standalone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  margin: 0 auto 40px auto;
+  background: white;
+  border-radius: 24px;
+  border: 1px solid #e2e8f0;
+  width: fit-content;
+  min-width: 320px;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05);
+}
+
+.avatar-large-wrapper {
+  position: relative;
   margin-bottom: 20px;
 }
 
-.user-info-container-mini {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+.user-avatar-hero {
+  width: 100px;
+  height: 100px;
+  border-radius: 30px;
+  object-fit: cover;
+  border: 4px solid white;
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.1);
 }
 
-.user-avatar-mini {
+.google-hero-badge {
+  position: absolute;
+  bottom: -4px;
+  right: -4px;
+  background: white;
   width: 32px;
   height: 32px;
   border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
 }
 
-.user-details-mini .user-name-mini {
+.google-hero-badge img {
+  width: 18px;
+  height: 18px;
+}
+
+.user-hero-text {
+  text-align: center;
+}
+
+.user-hero-name {
+  font-size: 26px;
+  font-weight: 850;
+  color: #0f172a;
+  margin: 0 0 4px 0;
+  letter-spacing: -1px;
+}
+
+.user-hero-email {
+  font-size: 15px;
+  color: #64748b;
+  margin: 0;
+  font-weight: 500;
+}
+
+.modal-actions-vertical {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+
+.btn-unlink-full {
+  background: #ef4444;
+  color: white;
+  border: none;
+  padding: 12px;
+  border-radius: 8px;
   font-weight: 700;
-  font-size: 14px;
-  margin: 0;
+  cursor: pointer;
+  width: 100%;
 }
 
-.user-details-mini .user-email-mini {
-  font-size: 11px;
-  color: #666;
-  margin: 0;
+.btn-cancel-modal {
+  background: #f8fafc;
+  color: #64748b;
+  border: 1px solid #e2e8f0;
+  padding: 12px;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.modal-header-icon-danger {
+  font-size: 40px;
+  text-align: center;
+  margin-bottom: 20px;
 }
 
 .security-config-card {

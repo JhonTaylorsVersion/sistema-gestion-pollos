@@ -29,6 +29,8 @@ pub fn run() {
 
 
     .plugin(SqlBuilder::default().build())
+    .plugin(tauri_plugin_single_instance::init(|_app, _args, _cwd| {}))
+    .plugin(tauri_plugin_deep_link::init())
     .plugin(tauri_plugin_opener::init())
     .plugin(tauri_plugin_dialog::init())
     .plugin(tauri_plugin_fs::init())

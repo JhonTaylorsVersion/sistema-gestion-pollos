@@ -19,16 +19,22 @@ export interface DriveFile {
   size: string;
 }
 
-const CLIENT_ID = "REDACTED_CLIENT_ID";
+const CLIENT_ID =
+  "REDACTED_CLIENT_ID";
 const CLIENT_SECRET = "REDACTED_CLIENT_SECRET";
 const REDIRECT_URI = "http://127.0.0.1:14210";
-const SCOPES = "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email";
+const SCOPES =
+  "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email";
 
 const user = ref<GoogleUser | null>(null);
 const loading = ref(false);
 const backups = ref<DriveFile[]>([]);
-const accessToken = ref<string | null>(localStorage.getItem("google_access_token"));
-const refreshToken = ref<string | null>(localStorage.getItem("google_refresh_token"));
+const accessToken = ref<string | null>(
+  localStorage.getItem("google_access_token"),
+);
+const refreshToken = ref<string | null>(
+  localStorage.getItem("google_refresh_token"),
+);
 
 const lastAutoUploadTime = ref<number>(0);
 const dailyFileId = ref<string | null>(null);
@@ -36,18 +42,18 @@ let deferredTimer: any = null;
 
 export const isDirty = ref(false);
 
-console.log("💿 useDrive.ts: Cargando estado global. Token:", localStorage.getItem("google_access_token") ? "PRESENTE" : "AUSENTE");
-
-
-
+console.log(
+  "💿 useDrive.ts: Cargando estado global. Token:",
+  localStorage.getItem("google_access_token") ? "PRESENTE" : "AUSENTE",
+);
 
 export function useDrive() {
-
-
   const login = async (force: boolean = false) => {
     // 🛡️ GUARDIA: Si ya hay un login en curso, no permitir otro para evitar conflictos de puertos
     if (loading.value) {
-      console.warn("⚠️ [useDrive] Intento de login duplicado bloqueado para evitar conflictos.");
+      console.warn(
+        "⚠️ [useDrive] Intento de login duplicado bloqueado para evitar conflictos.",
+      );
       return false;
     }
 
@@ -58,16 +64,17 @@ export function useDrive() {
 
       // 1. Iniciamos el servidor de escucha (sin esperar el await aún)
       // Esto asegura que la app ya esté "escuchando" cuando el navegador se abra
-      const serverTask = invoke<string>("start_oauth_server", { authUrlBase: authUrl });
+      const serverTask = invoke<string>("start_oauth_server", {
+        authUrlBase: authUrl,
+      });
 
       // 2. Lanzar el navegador desde el frontend
       await openUrl(authUrl);
 
       // 3. Ahora sí esperamos el código de autorización
       const code = await serverTask;
-      
-      const response = await fetch("https://oauth2.googleapis.com/token", {
 
+      const response = await fetch("https://oauth2.googleapis.com/token", {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams({
@@ -79,7 +86,7 @@ export function useDrive() {
         }).toString(),
       });
 
-      const data = await response.json() as any;
+      const data = (await response.json()) as any;
 
       if (data.access_token) {
         setTokens(data.access_token, data.refresh_token);
@@ -89,17 +96,18 @@ export function useDrive() {
       return false;
     } catch (error) {
       console.error("Login Error:", error);
-      await message("Error al iniciar sesión con Google. Por favor, verifica tu conexión o intenta de nuevo.", {
-        title: "Error de Conexión",
-        kind: "error",
-      });
+      await message(
+        "Error al iniciar sesión con Google. Por favor, verifica tu conexión o intenta de nuevo.",
+        {
+          title: "Error de Conexión",
+          kind: "error",
+        },
+      );
       return false;
     } finally {
       loading.value = false;
     }
   };
-
-
 
   const setTokens = (access: string, refresh?: string) => {
     accessToken.value = access;
@@ -119,7 +127,6 @@ export function useDrive() {
     localStorage.removeItem("google_refresh_token");
   };
 
-
   const refreshAccessToken = async () => {
     if (!refreshToken.value) return false;
     try {
@@ -133,9 +140,12 @@ export function useDrive() {
           grant_type: "refresh_token",
         }).toString(),
       });
-      const data = await response.json() as any;
+      const data = (await response.json()) as any;
       if (data.access_token) {
-        setTokens(data.access_token, data.refresh_token || refreshToken.value as string);
+        setTokens(
+          data.access_token,
+          data.refresh_token || (refreshToken.value as string),
+        );
         return true;
       }
     } catch (error) {
@@ -174,16 +184,18 @@ export function useDrive() {
 
   const fetchUserInfo = async () => {
     try {
-      const response = await fetchWithAuth("https://www.googleapis.com/oauth2/v3/userinfo");
-      const data = await response.json() as any;
+      const response = await fetchWithAuth(
+        "https://www.googleapis.com/oauth2/v3/userinfo",
+      );
+      const data = (await response.json()) as any;
       console.log("Respuesta Completa de Google UserInfo:", data);
-      
+
       user.value = {
         name: data.name || "Usuario",
         email: data.email || "Sin correo",
-        picture: data.picture || ""
+        picture: data.picture || "",
       };
-      
+
       console.log("Perfil Procesado:", user.value);
     } catch (error) {
       console.error("User Info Error:", error);
@@ -196,15 +208,15 @@ export function useDrive() {
       // IMPORTANTE: Codificamos el query para evitar errores de interpretación (espacios -> %20)
       const query = "name contains 'pollos_backup_' and trashed = false";
       const response = await fetchWithAuth(
-        `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&orderBy=createdTime desc&fields=files(id, name, createdTime, size)`
+        `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&orderBy=createdTime desc&fields=files(id, name, createdTime, size)`,
       );
-      const data = await response.json() as any;
+      const data = (await response.json()) as any;
       backups.value = data.files || [];
-      
+
       // Si el archivo que teníamos en caché para hoy no aparece en la lista fresca, lo olvidamos
       const dateStr = new Date().toISOString().slice(0, 10);
       const todayFileName = `pollos_backup_${dateStr}.db`;
-      const existsInList = backups.value.some(f => f.name === todayFileName);
+      const existsInList = backups.value.some((f) => f.name === todayFileName);
       if (!existsInList) {
         dailyFileId.value = null;
       }
@@ -215,8 +227,6 @@ export function useDrive() {
     }
   };
 
-
-
   // --- NUEVA LÓGICA DE CARPETAS ---
   const currentMonthFolderId = ref<string | null>(null);
 
@@ -226,12 +236,12 @@ export function useDrive() {
       if (parentId) {
         query += ` and '${parentId}' in parents`;
       }
-      
+
       const response = await fetchWithAuth(
-        `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id)`
+        `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id)`,
       );
-      const data = await response.json() as any;
-      
+      const data = (await response.json()) as any;
+
       if (data.files && data.files.length > 0) {
         return data.files[0].id;
       }
@@ -250,9 +260,9 @@ export function useDrive() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(metadata),
-        }
+        },
       );
-      const createdData = await createResponse.json() as any;
+      const createdData = (await createResponse.json()) as any;
       return createdData.id;
     } catch (e) {
       console.error(`Error en getOrCreateFolder (${name}):`, e);
@@ -275,10 +285,23 @@ export function useDrive() {
       if (!yearId) return null;
 
       // 3. Mes
-      const mesesFull = ["ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO", "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"];
+      const mesesFull = [
+        "ENERO",
+        "FEBRERO",
+        "MARZO",
+        "ABRIL",
+        "MAYO",
+        "JUNIO",
+        "JULIO",
+        "AGOSTO",
+        "SEPTIEMBRE",
+        "OCTUBRE",
+        "NOVIEMBRE",
+        "DICIEMBRE",
+      ];
       const mesActualStr = mesesFull[new Date().getMonth()];
       const monthId = await getOrCreateFolder(mesActualStr, yearId);
-      
+
       currentMonthFolderId.value = monthId;
       return monthId;
     } catch (e) {
@@ -295,9 +318,9 @@ export function useDrive() {
       if (parentId) query += ` and '${parentId}' in parents`;
 
       const response = await fetchWithAuth(
-        `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id)`
+        `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id)`,
       );
-      const data = await response.json() as any;
+      const data = (await response.json()) as any;
       if (data.files && data.files.length > 0) {
         dailyFileId.value = data.files[0].id;
         return dailyFileId.value;
@@ -308,23 +331,22 @@ export function useDrive() {
     return null;
   };
 
-
   const uploadBackup = async (manual = true, force = false) => {
     if (!accessToken.value) return;
 
     const now = Date.now();
     const COOLDOWN_TIME = 500; // ⚡ Sincronización casi instantánea
 
-    if (!manual && !force && (now - lastAutoUploadTime.value < COOLDOWN_TIME)) {
-       if (deferredTimer) return;
+    if (!manual && !force && now - lastAutoUploadTime.value < COOLDOWN_TIME) {
+      if (deferredTimer) return;
 
-       const remaining = (COOLDOWN_TIME + 100) - (now - lastAutoUploadTime.value);
-       deferredTimer = setTimeout(() => {
-         deferredTimer = null;
-         uploadBackup(false, true);
-       }, remaining);
+      const remaining = COOLDOWN_TIME + 100 - (now - lastAutoUploadTime.value);
+      deferredTimer = setTimeout(() => {
+        deferredTimer = null;
+        uploadBackup(false, true);
+      }, remaining);
 
-       return;
+      return;
     }
 
     if (deferredTimer) {
@@ -334,7 +356,7 @@ export function useDrive() {
 
     try {
       loading.value = true;
-      
+
       // 📂 Asegurar carpetas Raíz -> Año -> Mes
       const folderId = await ensureFolderHierarchy();
       if (!folderId) {
@@ -343,7 +365,7 @@ export function useDrive() {
 
       const dbPath = await invoke<string>("get_db_path");
       const dbContent = await readFile(dbPath);
-      
+
       const dateStr = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
       const fileName = `pollos_backup_${dateStr}.db`;
 
@@ -354,17 +376,21 @@ export function useDrive() {
 
       if (existingId) {
         // ACTUALIZAR (PATCH)
-        console.log(`☁️ Actualizando backup diario en carpeta mensual ID: ${existingId}`);
+        console.log(
+          `☁️ Actualizando backup diario en carpeta mensual ID: ${existingId}`,
+        );
         response = await fetchWithAuth(
           `https://www.googleapis.com/upload/drive/v3/files/${existingId}?uploadType=media`,
           {
             method: "PATCH",
             body: dbContent,
-          }
+          },
         );
       } else {
         // CREAR (POST Multipart) con el parent folder
-        console.log(`☁️ Creando nuevo backup diario en carpeta mensual: ${fileName}`);
+        console.log(
+          `☁️ Creando nuevo backup diario en carpeta mensual: ${fileName}`,
+        );
         const metadata: any = {
           name: fileName,
           mimeType: "application/octet-stream",
@@ -372,18 +398,24 @@ export function useDrive() {
         if (folderId) metadata.parents = [folderId];
 
         const formData = new FormData();
-        formData.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
-        formData.append("file", new Blob([dbContent], { type: "application/octet-stream" }));
+        formData.append(
+          "metadata",
+          new Blob([JSON.stringify(metadata)], { type: "application/json" }),
+        );
+        formData.append(
+          "file",
+          new Blob([dbContent], { type: "application/octet-stream" }),
+        );
 
         response = await fetchWithAuth(
           "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart",
           {
             method: "POST",
             body: formData,
-          }
+          },
         );
 
-        const data = await response.json() as any;
+        const data = (await response.json()) as any;
         if (data.id) dailyFileId.value = data.id;
       }
 
@@ -392,10 +424,13 @@ export function useDrive() {
         isDirty.value = false; // Reset glocal dirty flag
 
         if (manual) {
-          await message(`Copia de seguridad ${existingId ? 'actualizada' : 'subida'} con éxito a Google Drive.`, {
-            title: "Backup Exitoso",
-            kind: "info",
-          });
+          await message(
+            `Copia de seguridad ${existingId ? "actualizada" : "subida"} con éxito a Google Drive.`,
+            {
+              title: "Backup Exitoso",
+              kind: "info",
+            },
+          );
         }
         await listBackups();
         isDirty.value = false; // ✅ ELAVISO DE ENTREGA
@@ -406,7 +441,8 @@ export function useDrive() {
     } catch (error) {
       console.error("Upload Error:", error);
       if (manual) {
-        const msg = typeof error === 'string' ? error : (error as Error).message;
+        const msg =
+          typeof error === "string" ? error : (error as Error).message;
         await message(`Error al subir copia de seguridad: ${msg}`, {
           title: "Error de Subida",
           kind: "error",
@@ -420,15 +456,12 @@ export function useDrive() {
 
   // ... (restoreBackup logic) ...
 
-
-
-
   const uploadFile = async (file: File) => {
     if (!accessToken.value) return;
     try {
       loading.value = true;
       const folderId = await ensureFolderHierarchy();
-      
+
       const metadata: any = {
         name: file.name,
         mimeType: file.type || "application/octet-stream",
@@ -436,7 +469,10 @@ export function useDrive() {
       if (folderId) metadata.parents = [folderId];
 
       const formData = new FormData();
-      formData.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
+      formData.append(
+        "metadata",
+        new Blob([JSON.stringify(metadata)], { type: "application/json" }),
+      );
       formData.append("file", file);
 
       const response = await fetchWithAuth(
@@ -444,7 +480,7 @@ export function useDrive() {
         {
           method: "POST",
           body: formData,
-        }
+        },
       );
 
       if (response.ok) {
@@ -461,27 +497,32 @@ export function useDrive() {
   };
 
   const restoreBackup = async (fileId: string) => {
-
     try {
-      const confirmed = await ask("¿Estás seguro? Se reemplazarán todos los datos actuales y la app se reiniciará.", {
-        title: "Confirmar Restauración",
-        kind: "warning",
-      });
+      const confirmed = await ask(
+        "¿Estás seguro? Se reemplazarán todos los datos actuales y la app se reiniciará.",
+        {
+          title: "Confirmar Restauración",
+          kind: "warning",
+        },
+      );
 
       if (!confirmed) return;
-      
+
       loading.value = true;
       const response = await fetchWithAuth(
         `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
-        { responseType: 1 } // Binary
+        { responseType: 1 }, // Binary
       );
-      
+
       if (!response.ok) {
         if (response.status === 404) {
-          await message("El archivo de seguridad ya no existe en Google Drive. Es posible que haya sido eliminado permanentemente desde otro dispositivo.", {
-            title: "Archivo no encontrado",
-            kind: "error",
-          });
+          await message(
+            "El archivo de seguridad ya no existe en Google Drive. Es posible que haya sido eliminado permanentemente desde otro dispositivo.",
+            {
+              title: "Archivo no encontrado",
+              kind: "error",
+            },
+          );
           // Aprovechamos para limpiar la lista
           await listBackups(true);
         } else {
@@ -498,23 +539,28 @@ export function useDrive() {
       }
 
       const dbPath = await invoke<string>("get_db_path");
-      
+
       await writeFile(dbPath, new Uint8Array(content));
-      
-      await message("La base de datos se ha restaurado con éxito. La aplicación se reiniciará ahora para aplicar los cambios.", {
-        title: "Restauración Completada",
-        kind: "info",
-      });
+
+      await message(
+        "La base de datos se ha restaurado con éxito. La aplicación se reiniciará ahora para aplicar los cambios.",
+        {
+          title: "Restauración Completada",
+          kind: "info",
+        },
+      );
 
       await invoke("restart_app");
-
     } catch (error) {
       console.error("Restore Error:", error);
-      const msg = typeof error === 'string' ? error : (error as Error).message;
-      await message(`Error al restaurar: ${msg}\n\nEs posible que la base de datos esté bloqueada por el programa. Intenta cerrar otras ventanas o reinicia la app.`, {
-        title: "Error de Restauración",
-        kind: "error",
-      });
+      const msg = typeof error === "string" ? error : (error as Error).message;
+      await message(
+        `Error al restaurar: ${msg}\n\nEs posible que la base de datos esté bloqueada por el programa. Intenta cerrar otras ventanas o reinicia la app.`,
+        {
+          title: "Error de Restauración",
+          kind: "error",
+        },
+      );
     } finally {
       loading.value = false;
     }
@@ -525,16 +571,18 @@ export function useDrive() {
       loading.value = true;
       const response = await fetchWithAuth(
         `https://www.googleapis.com/drive/v3/files/${fileId}`,
-        { method: "DELETE" }
+        { method: "DELETE" },
       );
-      
+
       if (response.ok) {
         // Refrescamos la lista inmediatamente
         await listBackups(true);
         return true;
       } else {
-        const errorData = await response.json() as any;
-        throw new Error(errorData.error?.message || "Error al eliminar de Drive");
+        const errorData = (await response.json()) as any;
+        throw new Error(
+          errorData.error?.message || "Error al eliminar de Drive",
+        );
       }
     } catch (error) {
       console.error("Delete Error:", error);
@@ -546,19 +594,23 @@ export function useDrive() {
 
   // --- Sincronización entre ventanas ---
   // Escuchamos cambios en localStorage para actualizar el estado si otra ventana inicia sesión
-  if (typeof window !== 'undefined') {
-    window.addEventListener('storage', (event) => {
-      console.log("📢 [useDrive] Cambios en almacenamiento detectados:", event.key, "->", event.newValue ? "TOKEN PRESENTE" : "BORRADO");
-      if (event.key === 'google_access_token') {
+  if (typeof window !== "undefined") {
+    window.addEventListener("storage", (event) => {
+      console.log(
+        "📢 [useDrive] Cambios en almacenamiento detectados:",
+        event.key,
+        "->",
+        event.newValue ? "TOKEN PRESENTE" : "BORRADO",
+      );
+      if (event.key === "google_access_token") {
         accessToken.value = event.newValue;
         if (event.newValue) fetchUserInfo();
       }
-      if (event.key === 'google_refresh_token') {
+      if (event.key === "google_refresh_token") {
         refreshToken.value = event.newValue;
       }
     });
   }
-
 
   onMounted(() => {
     if (accessToken.value) {
@@ -581,7 +633,4 @@ export function useDrive() {
 
     isDirty,
   };
-
-
 }
-
