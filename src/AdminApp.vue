@@ -1,12 +1,14 @@
 <script setup lang="ts">
+import { invoke } from "@tauri-apps/api/core";
 import { ref, computed, watch } from "vue";
 import Database from "@tauri-apps/plugin-sql";
 import ExcelJS from "exceljs";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import JSZip from "jszip";
-import { save } from "@tauri-apps/plugin-dialog";
-import { writeFile } from "@tauri-apps/plugin-fs";
+import { save, ask, message, open } from "@tauri-apps/plugin-dialog";
+import { writeFile, readFile } from "@tauri-apps/plugin-fs";
+
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useDrive } from "./composables/useDrive";
 
@@ -89,7 +91,12 @@ type ConjuntoResumen = {
 };
 
 // Añadimos "detalle" y "sincronizacion" a las secciones posibles
-type SeccionActiva = "busqueda" | "galpones" | "conjuntos" | "detalle" | "sincronizacion";
+type SeccionActiva =
+  | "busqueda"
+  | "galpones"
+  | "conjuntos"
+  | "detalle"
+  | "sincronizacion";
 
 // Saber si la última búsqueda fue general (sin filtros)
 const busquedaSinFiltros = ref(false);
@@ -136,17 +143,21 @@ const seccionActiva = ref<SeccionActiva>("busqueda");
 // Variable para recordar a dónde debe volver el botón "Regresar"
 const origenDetalle = ref<SeccionActiva | null>(null);
 
-const seccionSidebarActiva = computed<"busqueda" | "galpones" | "conjuntos" | "sincronizacion">(
-  () => {
-    if (seccionActiva.value === "detalle") {
-      if (origenDetalle.value === "galpones") return "galpones";
-      if (origenDetalle.value === "conjuntos") return "conjuntos";
-      return "busqueda";
-    }
+const seccionSidebarActiva = computed<
+  "busqueda" | "galpones" | "conjuntos" | "sincronizacion"
+>(() => {
+  if (seccionActiva.value === "detalle") {
+    if (origenDetalle.value === "galpones") return "galpones";
+    if (origenDetalle.value === "conjuntos") return "conjuntos";
+    return "busqueda";
+  }
 
-    return seccionActiva.value as "busqueda" | "galpones" | "conjuntos" | "sincronizacion";
-  },
-);
+  return seccionActiva.value as
+    | "busqueda"
+    | "galpones"
+    | "conjuntos"
+    | "sincronizacion";
+});
 
 const filtros = ref({
   fechaDesde: "",
@@ -172,7 +183,160 @@ let db: Database | null = null;
 const initDB = async () => {
   if (db) return db;
   db = await Database.load("sqlite:pollos.db");
+  await db.execute(
+    `CREATE TABLE IF NOT EXISTS app_config (key TEXT PRIMARY KEY, value TEXT)`,
+  );
   return db;
+};
+
+// --- Estados de Seguridad 2FA ---
+const twoFactorSecret = ref<string | null>(null);
+const is2FAConfirmed = ref(false);
+const is2FAEnabled = computed(
+  () => !!twoFactorSecret.value && is2FAConfirmed.value,
+);
+
+const filaEliminandoId = ref<string | null>(null);
+const show2FASetupModal = ref(false);
+const setup2FAData = ref<{ secret: string; qr: string } | null>(null);
+
+const show2FAVerifyModal = ref(false);
+const input2FACode = ref("");
+const verifyTargetFileId = ref<string | null>(null);
+const verificando2FA = ref(false);
+const subSeccionSync = ref<string>("backups");
+const recoveryCodes = ref<string[]>([]);
+const showRecoveryModal = ref(false);
+const haDescargadoCodigos = ref(false);
+const subiendoADrive = ref(false);
+const subidaDriveExitosa = ref(false);
+
+const modalSeguridadTitulo = computed(() => {
+  return verifyTargetFileId.value === "RESET_2FA_ACTION"
+    ? "Seguridad: Autorizar Cambio"
+    : "Verificación de Seguridad";
+});
+
+const modalSeguridadMensaje = computed(() => {
+  return verifyTargetFileId.value === "RESET_2FA_ACTION"
+    ? "Para vincular un nuevo celular, ingresa el código actual de tu Authenticator o un código de recuperación."
+    : "Estás intentando eliminar una copia de seguridad permanentemente. Ingresa el código de 6 dígitos de tu Authenticator o un código de recuperación para continuar.";
+});
+
+const cargarConfig2FA = async () => {
+  try {
+    const database = await initDB();
+    const res = await database.select<{ key: string; value: string }[]>(
+      "SELECT key, value FROM app_config WHERE key IN ('2fa_secret', '2fa_recovery_codes', '2fa_confirmed')",
+    );
+
+    if (res && res.length > 0) {
+      const secret = res.find((r) => r.key === "2fa_secret")?.value;
+      const codesRaw = res.find((r) => r.key === "2fa_recovery_codes")?.value;
+      const confirmed = res.find((r) => r.key === "2fa_confirmed")?.value;
+
+      if (secret) twoFactorSecret.value = secret;
+      if (codesRaw) recoveryCodes.value = JSON.parse(codesRaw);
+      if (confirmed === "true") is2FAConfirmed.value = true;
+
+      // SI HAY SECRETO PERO NO ESTÁ CONFIRMADO (Cajón de seguridad anti-apagones)
+      if (twoFactorSecret.value && !is2FAConfirmed.value) {
+        haDescargadoCodigos.value = false;
+        showRecoveryModal.value = true;
+      }
+    }
+  } catch (e) {
+    console.error("Error al cargar config 2FA:", e);
+  }
+};
+
+const forzarResetMaestro = async () => {
+  const confirm = await ask(
+    "¿ESTÁS SEGURO? Esto eliminará la protección 2FA sin pedir código.",
+    {
+      title: "RESET MAESTRO",
+      kind: "warning",
+    },
+  );
+
+  if (confirm) {
+    try {
+      const db = await initDB();
+      await db.execute("DELETE FROM app_config WHERE key = '2fa_secret'");
+      await db.execute(
+        "DELETE FROM app_config WHERE key = '2fa_recovery_codes'",
+      );
+      await db.execute("DELETE FROM app_config WHERE key = '2fa_confirmed'");
+
+      twoFactorSecret.value = null;
+      recoveryCodes.value = [];
+      is2FAConfirmed.value = false;
+
+      await message("Protección 2FA eliminada con éxito.", {
+        title: "Reset Completo",
+        kind: "info",
+      });
+    } catch (e) {
+      console.error("Error en reset maestro:", e);
+      await message("Error al resetear la base de datos.", {
+        title: "Error",
+        kind: "error",
+      });
+    }
+  }
+};
+
+const descargarCodigosRecuperacion = async () => {
+  try {
+    if (recoveryCodes.value.length === 0) return;
+
+    // 1. Generar los bytes de la Llave Maestra encriptada en Rust
+    const keyBytes = await invoke<number[]>("create_master_key_file", {
+      codes: recoveryCodes.value,
+    });
+    const contentArray = new Uint8Array(keyBytes);
+
+    // 2. Pedir ubicación para guardar el archivo .key
+    const filePath = await save({
+      filters: [{ name: "Llave Maestra de Rescate", extensions: ["key"] }],
+      defaultPath: "Llave_Maestra_Seguridad.key",
+    });
+
+    if (filePath) {
+      // 3. Guardar el archivo cifrado usando el motor de Rust
+      await invoke("save_master_key_file", {
+        path: filePath,
+        content: keyBytes,
+      });
+      haDescargadoCodigos.value = true;
+
+      const subida = await ask(
+        "Llave Maestra guardada en tu PC. ¿Deseas subir una copia cifrada a tu Google Drive?",
+        {
+          title: "Respaldo en la Nube",
+          kind: "info",
+        },
+      );
+
+      if (subida) {
+        await subirCodigosADrive(contentArray);
+      } else {
+        await message(
+          "Llave Maestra descargada con éxito. Ahora puedes finalizar.",
+          {
+            title: "Seguridad Lista",
+            kind: "info",
+          },
+        );
+      }
+    }
+  } catch (e) {
+    console.error("Error al descargar códigos:", e);
+    await message("No se pudo guardar el archivo. Inténtalo de nuevo.", {
+      title: "Error",
+      kind: "error",
+    });
+  }
 };
 
 const iniciarSesion = async () => {
@@ -183,9 +347,226 @@ const iniciarSesion = async () => {
     autenticado.value = true;
     console.log("✅ Sesión iniciada");
 
-    await Promise.all([cargarGalpones(), cargarConjuntos()]);
+    await Promise.all([cargarGalpones(), cargarConjuntos(), cargarConfig2FA()]);
   } else {
     alert("Credenciales incorrectas");
+  }
+};
+
+// --- Manejadores 2FA ---
+const iniciar2FASetup = async () => {
+  if (is2FAEnabled.value) {
+    // Si ya está activo, primero pedimos el código actual para autorizar el cambio
+    verifyTargetFileId.value = "RESET_2FA_ACTION"; // Marcador especial
+    input2FACode.value = "";
+    show2FAVerifyModal.value = true;
+    return;
+  }
+
+  // Si no está activo, procedemos a generar el QR inicial
+  generarNuevoQR();
+};
+
+const generarNuevoQR = async () => {
+  try {
+    const [secret, qr] = await invoke<[string, string]>("generate_2fa_setup");
+    setup2FAData.value = { secret, qr };
+    show2FASetupModal.value = true;
+    input2FACode.value = "";
+  } catch (e) {
+    console.error(e);
+    await message(`Error al iniciar configuración 2FA: ${e}`, {
+      title: "Error",
+      kind: "error",
+    });
+  }
+};
+
+const confirmar2FASetup = async () => {
+  if (!setup2FAData.value) return;
+  try {
+    verificando2FA.value = true;
+    const isValid = await invoke<boolean>("verify_2fa_code", {
+      secretBase32: setup2FAData.value.secret,
+      code: input2FACode.value,
+    });
+
+    if (isValid) {
+      // Generar 5 códigos de recuperación aleatorios
+      const newCodes = Array.from({ length: 5 }, () =>
+        Math.random().toString(36).substring(2, 10).toUpperCase(),
+      );
+
+      const database = await initDB();
+      await database.execute(
+        "INSERT OR REPLACE INTO app_config (key, value) VALUES ('2fa_secret', ?)",
+        [setup2FAData.value.secret],
+      );
+      await database.execute(
+        "INSERT OR REPLACE INTO app_config (key, value) VALUES ('2fa_recovery_codes', ?)",
+        [JSON.stringify(newCodes)],
+      );
+      await database.execute(
+        "INSERT OR REPLACE INTO app_config (key, value) VALUES ('2fa_confirmed', ?)",
+        ["false"],
+      );
+
+      twoFactorSecret.value = setup2FAData.value.secret;
+      recoveryCodes.value = newCodes;
+      haDescargadoCodigos.value = false;
+      is2FAConfirmed.value = false;
+
+      show2FASetupModal.value = false;
+      showRecoveryModal.value = true;
+    } else {
+      await message("Código incorrecto. Verifica tu celular.", {
+        title: "Error de Código",
+        kind: "error",
+      });
+    }
+  } catch (e) {
+    console.error(e);
+  } finally {
+    verificando2FA.value = false;
+  }
+};
+
+const finalizarConfiguracion2FA = async () => {
+  const db = await initDB();
+  await db.execute(
+    "UPDATE app_config SET value = 'true' WHERE key = '2fa_confirmed'",
+  );
+  is2FAConfirmed.value = true;
+  showRecoveryModal.value = false;
+  await message("Seguridad 2FA configurada y activada correctamente.", {
+    title: "Éxito",
+    kind: "info",
+  });
+};
+
+const subirCodigosADrive = async (contentArray: Uint8Array) => {
+  try {
+    subiendoADrive.value = true;
+    const buffer = contentArray.buffer as ArrayBuffer;
+    const blob = new Blob([buffer], { type: "application/octet-stream" });
+    const file = new File([blob], "Llave_Maestra_Seguridad.key", {
+      type: "application/octet-stream",
+    });
+
+    await uploadFileDrive(file);
+
+    subidaDriveExitosa.value = true;
+    await message("Copia cifrada guardada en Google Drive con éxito.", {
+      title: "Respaldo en Nube Listo",
+      kind: "info",
+    });
+  } catch (e) {
+    console.error("Error al subir a Drive:", e);
+    await message("No se pudo subir a Drive. Asegúrate de tener conexión.", {
+      title: "Error de Subida",
+      kind: "error",
+    });
+  } finally {
+    subiendoADrive.value = false;
+  }
+};
+
+const cargarLlaveMaestra = async () => {
+  try {
+    const filePath = await open({
+      multiple: false,
+      filters: [{ name: "Llave Maestra Pollos", extensions: ["key"] }],
+    });
+
+    if (filePath && typeof filePath === "string") {
+      verificando2FA.value = true;
+      // Pequeña pausa para que se vea el "Leyendo" si es muy rápido
+      await new Promise((r) => setTimeout(r, 500));
+
+      const fileContent = await readFile(filePath);
+
+      const isValid = await invoke<boolean>("validate_master_key_file", {
+        fileContent: Array.from(fileContent),
+        storedCodes: recoveryCodes.value,
+      });
+
+      if (isValid) {
+        const proceed = await ask(
+          "Llave Maestra leída y validada correctamente. ¿Deseas continuar con el proceso?",
+          {
+            title: "Validación Exitosa",
+            kind: "info",
+          },
+        );
+
+        if (proceed) {
+          input2FACode.value = recoveryCodes.value[0];
+          await procesarEliminacionCon2FA();
+        }
+      } else {
+        await message(
+          "Esta llave no es válida para este sistema o es de una configuración anterior.",
+          {
+            title: "Llave Inválida",
+            kind: "error",
+          },
+        );
+      }
+    }
+  } catch (e) {
+    console.error("Error al cargar llave maestra:", e);
+    await message("Error al leer el archivo de llave.", {
+      title: "Error",
+      kind: "error",
+    });
+  } finally {
+    verificando2FA.value = false;
+  }
+};
+
+const handleKeyFileDrop = async (e: DragEvent) => {
+  e.preventDefault();
+  const file = e.dataTransfer?.files[0];
+  if (!file) return;
+
+  // En Tauri (web context) el objeto File no tiene la ruta completa por seguridad,
+  // pero podemos leerlo como ArrayBuffer y validarlo directamente.
+  try {
+    verificando2FA.value = true;
+    const buffer = await file.arrayBuffer();
+    const fileContent = new Uint8Array(buffer);
+
+    // Pequeña pausa para feedback visual
+    await new Promise((r) => setTimeout(r, 500));
+
+    const isValid = await invoke<boolean>("validate_master_key_file", {
+      fileContent: Array.from(fileContent),
+      storedCodes: recoveryCodes.value,
+    });
+
+    if (isValid) {
+      const proceed = await ask(
+        "Llave Maestra detectada y validada. ¿Deseas continuar con el proceso?",
+        {
+          title: "Llave Válida",
+          kind: "info",
+        },
+      );
+
+      if (proceed) {
+        input2FACode.value = recoveryCodes.value[0];
+        await procesarEliminacionCon2FA();
+      }
+    } else {
+      await message(
+        "Este archivo no es una Llave Maestra válida para este sistema.",
+        { title: "Archivo Inválido", kind: "error" },
+      );
+    }
+  } catch (err) {
+    console.error("Error en drop:", err);
+  } finally {
+    verificando2FA.value = false;
   }
 };
 
@@ -1512,7 +1893,33 @@ const totalFundasActual = computed(() => {
   return tablaConsumoActual.value.reduce((acc, fila) => acc + fila.fundas, 0);
 });
 
-// --- Lógica de Google Drive ---
+const formatearUbicacionDrive = (fechaStr: string) => {
+  if (!fechaStr) return "—";
+  try {
+    const fecha = new Date(fechaStr);
+    const año = fecha.getFullYear();
+    const mesesFull = [
+      "ENERO",
+      "FEBRERO",
+      "MARZO",
+      "ABRIL",
+      "MAYO",
+      "JUNIO",
+      "JULIO",
+      "AGOSTO",
+      "SEPTIEMBRE",
+      "OCTUBRE",
+      "NOVIEMBRE",
+      "DICIEMBRE",
+    ];
+    const mes = mesesFull[fecha.getMonth()];
+    return `${año} / ${mes}`;
+  } catch (e) {
+    return "—";
+  }
+};
+
+// --- LÓGICA DE GOOGLE DRIVE ---
 const {
   user: userDrive,
   loading: loadingDrive,
@@ -1521,13 +1928,141 @@ const {
   signout: signoutDrive,
   listBackups: listBackupsDrive,
   uploadBackup: uploadBackupDrive,
+  uploadFile: uploadFileDrive,
   restoreBackup: restoreBackupDrive,
+  deleteBackup: deleteBackupDrive,
   isAuthenticated: authenticatedDrive,
 } = useDrive();
 
+const eliminandoBackup = ref(false);
+
+const confirmarEliminarBackup = async (fileId: string, fileName: string) => {
+  if (!is2FAEnabled.value) {
+    const setup = await ask(
+      "Para eliminar copias de seguridad, primero debes activar la seguridad de Google Authenticator. ¿Deseas configurarlo ahora?",
+      {
+        title: "Seguridad Requerida",
+        kind: "warning",
+      },
+    );
+    if (setup) iniciar2FASetup();
+    return;
+  }
+
+  verifyTargetFileId.value = fileId;
+  input2FACode.value = "";
+  show2FAVerifyModal.value = true;
+};
+
+const procesarEliminacionCon2FA = async () => {
+  if (!verifyTargetFileId.value || !twoFactorSecret.value) return;
+
+  try {
+    verificando2FA.value = true;
+
+    // Primero intentamos validación TOTP normal (si son 6 dígitos)
+    let isValid = false;
+    if (input2FACode.value.length === 6) {
+      isValid = await invoke<boolean>("verify_2fa_code", {
+        secretBase32: twoFactorSecret.value,
+        code: input2FACode.value,
+      });
+    }
+
+    // SI NO ES VÁLIDO TOTP, intentamos como CÓDIGO DE RECUPERACIÓN
+    if (!isValid) {
+      const db = await initDB();
+      const res = await db.select<{ value: string }[]>(
+        "SELECT value FROM app_config WHERE key = '2fa_recovery_codes'",
+      );
+      if (res && res.length > 0) {
+        let codes: string[] = JSON.parse(res[0].value);
+        const index = codes.indexOf(input2FACode.value.toUpperCase());
+        if (index !== -1) {
+          isValid = true;
+          // Quemar código
+          codes.splice(index, 1);
+          await db.execute(
+            "UPDATE app_config SET value = ? WHERE key = '2fa_recovery_codes'",
+            [JSON.stringify(codes)],
+          );
+          recoveryCodes.value = codes;
+        }
+      }
+    }
+
+    if (isValid) {
+      if (verifyTargetFileId.value === "RESET_2FA_ACTION") {
+        // CASO: RESET DE SEGURIDAD
+        show2FAVerifyModal.value = false;
+        verifyTargetFileId.value = null;
+        generarNuevoQR();
+        return;
+      }
+
+      // CASO: ELIMINACIÓN DE BACKUP
+      const fileId = verifyTargetFileId.value;
+
+      show2FAVerifyModal.value = false;
+
+      filaEliminandoId.value = fileId;
+      await deleteBackupDrive(fileId);
+
+      await message("La copia de seguridad ha sido eliminada con éxito.", {
+        title: "Éxito",
+        kind: "info",
+      });
+
+      // Refrescar lista
+      listBackupsDrive();
+    } else {
+      await message(
+        "El código ingresado es incorrecto. Por favor, verifica tu aplicación Authenticator.",
+        {
+          title: "Código Inválido",
+          kind: "error",
+        },
+      );
+    }
+  } catch (e) {
+    console.error("Error al procesar eliminación 2FA:", e);
+    await message("Ocurrió un error al verificar el código.", {
+      title: "Error",
+      kind: "error",
+    });
+  } finally {
+    verificando2FA.value = false;
+    filaEliminandoId.value = null;
+    verifyTargetFileId.value = null;
+  }
+};
+
+let syncInterval: any = null;
+
 watch(seccionActiva, (newVal) => {
+  // Limpiar intervalo anterior si existe
+  if (syncInterval) {
+    clearInterval(syncInterval);
+    syncInterval = null;
+  }
+
   if (newVal === "sincronizacion" && authenticatedDrive.value) {
+    // 1. Carga inicial inmediata (con indicador visual)
     listBackupsDrive();
+
+    // 2. Iniciar "Polling" cada 30 segundos (silencioso)
+    syncInterval = setInterval(() => {
+      // SOLO refrescar si: estamos en la sección, estamos autenticados, NO estamos cargando y NO estamos eliminando
+      if (
+        seccionActiva.value === "sincronizacion" &&
+        authenticatedDrive.value &&
+        !loadingDrive.value &&
+        !eliminandoBackup.value
+      ) {
+        console.log("🔄 Auto-refresco de backups (silent)...");
+        listBackupsDrive(true);
+      }
+    }, 30000);
   }
 });
 </script>
@@ -2371,102 +2906,319 @@ watch(seccionActiva, (newVal) => {
         <template v-if="seccionActiva === 'sincronizacion'">
           <div class="dashboard-header">
             <h1>Sincronización en la Nube</h1>
-            <p>Respalda tu información en Google Drive y restáurala cuando la necesites.</p>
+            <p>
+              Respalda tu información en Google Drive y restáurala cuando la
+              necesites.
+            </p>
           </div>
 
           <div class="sync-container">
             <div v-if="!authenticatedDrive" class="sync-card empty">
               <div class="sync-icon-circle">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                >
                   <path d="M12 10v6m0 0l-3-3m3 3l3-3" />
-                  <path d="M22 12c0 3-2.5 5.5-5.5 5.5s-5.5-2.5-5.5-5.5 2.5-5.5 5.5-5.5 5.5 2.5 5.5 5.5z" />
+                  <path
+                    d="M22 12c0 3-2.5 5.5-5.5 5.5s-5.5-2.5-5.5-5.5 2.5-5.5 5.5-5.5 5.5 2.5 5.5 5.5z"
+                  />
                 </svg>
               </div>
               <h2>Sin conexión a Google Drive</h2>
-              <p>Debes vincular tu cuenta para habilitar los respaldos automáticos y manuales.</p>
-              <button class="btn-primary" @click="loginDrive" :disabled="loadingDrive">
-                {{ loadingDrive ? "Conectando..." : "Vincular Cuenta de Google" }}
+              <p>
+                Debes vincular tu cuenta para habilitar los respaldos
+                automáticos y manuales.
+              </p>
+              <button
+                class="btn-primary"
+                @click="() => loginDrive()"
+                :disabled="loadingDrive"
+              >
+                {{
+                  loadingDrive ? "Conectando..." : "Vincular Cuenta de Google"
+                }}
               </button>
             </div>
 
             <div v-else class="sync-layout">
-              <!-- Perfil de Usuario -->
-              <div class="sync-card profile">
-                  <div class="user-info-container">
-                    <img 
-                      v-if="userDrive?.picture" 
-                      :src="userDrive.picture" 
-                      class="user-avatar" 
-                      alt="Google Avatar" 
+              <!-- Sub-pestañas de Sincronización -->
+              <div class="sync-tabs">
+                <button
+                  class="sync-tab-btn"
+                  :class="{ active: subSeccionSync === 'backups' }"
+                  @click="subSeccionSync = 'backups'"
+                >
+                  📦 Mis Backups
+                </button>
+                <button
+                  class="sync-tab-btn"
+                  :class="{ active: subSeccionSync === 'seguridad' }"
+                  @click="subSeccionSync = 'seguridad'"
+                >
+                  🛡️ Seguridad 2FA
+                </button>
+              </div>
+
+              <!-- CONTENIDO: MIS BACKUPS -->
+              <div
+                v-if="subSeccionSync === 'backups'"
+                class="sync-main-content"
+              >
+                <!-- Banner de advertencia si no hay 2FA -->
+                <div v-if="!is2FAEnabled" class="security-warning-banner">
+                  <div class="warning-icon">⚠️</div>
+                  <div class="warning-text">
+                    <strong>Seguridad Desactivada:</strong> Por protección de
+                    tus datos, la función de <strong>borrar</strong> está
+                    bloqueada hasta que actives el Authenticator en la pestaña
+                    de Seguridad.
+                  </div>
+                </div>
+
+                <!-- Perfil de Usuario Compacto -->
+                <div class="sync-card profile-mini">
+                  <div class="user-info-container-mini">
+                    <img
+                      v-if="userDrive?.picture"
+                      :src="userDrive.picture"
+                      class="user-avatar-mini"
                       referrerpolicy="no-referrer"
                     />
-                    <div v-else class="user-avatar-placeholder">
-                      {{ (userDrive?.name || 'G')[0] }}
-                    </div>
-                    <div class="user-details">
-                      <p class="user-name">{{ userDrive?.name || 'Usuario de Google' }}</p>
-                      <p class="user-email">{{ userDrive?.email || 'Conectado' }}</p>
+                    <div class="user-details-mini">
+                      <p class="user-name-mini">
+                        {{ userDrive?.name || "Usuario" }}
+                      </p>
+                      <p class="user-email-mini">{{ userDrive?.email }}</p>
                     </div>
                   </div>
-                <button class="btn-unlink" @click="signoutDrive">
-                  Desvincular cuenta
-                </button>
-              </div>
+                </div>
 
-              <!-- Botón de Acción Principal -->
-              <div class="sync-main-actions">
-                <button class="btn-primary btn-lg" @click="uploadBackupDrive(true)" :disabled="loadingDrive">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                    <polyline points="17 8 12 3 7 8" />
-                    <line x1="12" y1="3" x2="12" y2="15" />
-                  </svg>
-                  Crear Backup Manual Ahora
-                </button>
-              </div>
-
-              <!-- Lista de Backups -->
-              <div class="sync-card backups-list">
-                <div class="list-header">
-                  <h3>Copias de Seguridad Disponibles</h3>
-                  <button class="btn-icon-only" @click="listBackupsDrive" title="Actualizar lista" :disabled="loadingDrive">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <polyline points="23 4 23 10 17 10" />
-                      <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+                <!-- Botón de Acción Principal -->
+                <div class="sync-main-actions">
+                  <button
+                    class="btn-primary btn-lg"
+                    @click="uploadBackupDrive(true)"
+                    :disabled="loadingDrive"
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      class="btn-icon"
+                    >
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                      <polyline points="17 8 12 3 7 8" />
+                      <line x1="12" y1="3" x2="12" y2="15" />
                     </svg>
+                    Crear Backup Manual Ahora
                   </button>
                 </div>
 
-                <div v-if="loadingDrive && backupsDrive.length === 0" class="list-loading">
-                  Cargando copias de seguridad...
+                <!-- Lista de Backups -->
+                <div class="sync-card backups-list">
+                  <div class="list-header">
+                    <h3>Copias de Seguridad Disponibles</h3>
+                    <button
+                      class="btn-icon-only"
+                      @click="() => listBackupsDrive()"
+                      title="Actualizar lista"
+                      :disabled="loadingDrive"
+                    >
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                      >
+                        <polyline points="23 4 23 10 17 10" />
+                        <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+                      </svg>
+                    </button>
+                  </div>
+
+                  <div
+                    v-if="loadingDrive && backupsDrive.length === 0"
+                    class="list-loading"
+                  >
+                    Cargando copias de seguridad...
+                  </div>
+
+                  <div v-else-if="backupsDrive.length === 0" class="list-empty">
+                    No se encontraron copias de seguridad en tu cuenta.
+                  </div>
+
+                  <table v-else class="backups-table">
+                    <thead>
+                      <tr>
+                        <th>Nombre del Archivo</th>
+                        <th>Ubicación (Nivel)</th>
+                        <th>Fecha</th>
+                        <th>Tamaño</th>
+                        <th>Acción</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="file in backupsDrive" :key="file.id">
+                        <td>{{ file.name }}</td>
+                        <td>
+                          <span class="location-badge">
+                            {{ formatearUbicacionDrive(file.createdTime) }}
+                          </span>
+                        </td>
+                        <td>
+                          {{ new Date(file.createdTime).toLocaleString() }}
+                        </td>
+                        <td>
+                          {{ (Number(file.size) / 1024 / 1024).toFixed(2) }} MB
+                        </td>
+                        <td>
+                          <div class="row-actions">
+                            <button
+                              class="btn-danger btn-sm"
+                              @click="restoreBackupDrive(file.id)"
+                              :disabled="loadingDrive || eliminandoBackup"
+                            >
+                              Restaurar
+                            </button>
+                            <button
+                              class="btn-secondary btn-sm btn-delete"
+                              :title="
+                                !is2FAEnabled
+                                  ? 'Debes activar la seguridad 2FA primero'
+                                  : filaEliminandoId === file.id
+                                    ? 'Eliminando...'
+                                    : 'Eliminar permanentemente'
+                              "
+                              @click="
+                                confirmarEliminarBackup(file.id, file.name)
+                              "
+                              :disabled="
+                                loadingDrive ||
+                                (filaEliminandoId &&
+                                  filaEliminandoId !== file.id) ||
+                                !is2FAEnabled
+                              "
+                              :class="{ disabled: !is2FAEnabled }"
+                            >
+                              <div
+                                v-if="filaEliminandoId === file.id"
+                                class="mini-spinner"
+                              ></div>
+                              <svg
+                                v-else
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                                class="icon-trash"
+                              >
+                                <polyline points="3 6 5 6 21 6"></polyline>
+                                <path
+                                  d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+                                ></path>
+                              </svg>
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
                 </div>
-                
-                <div v-else-if="backupsDrive.length === 0" class="list-empty">
-                  No se encontraron copias de seguridad en tu cuenta.
+              </div>
+
+              <!-- CONTENIDO: AJUSTES DE SEGURIDAD -->
+              <div
+                v-if="subSeccionSync === 'seguridad'"
+                class="sync-main-content"
+              >
+                <div class="sync-card security-config-card">
+                  <div class="security-hero-icon">
+                    {{ is2FAEnabled ? "🛡️" : "🔒" }}
+                  </div>
+                  <h2>Protección de Datos con Authenticator</h2>
+                  <p v-if="!is2FAEnabled">
+                    Vincular tu cuenta te permite realizar acciones críticas
+                    como borrar backups de forma segura desde tu teléfono, sin
+                    depender de navegadores.
+                  </p>
+                  <p v-else>
+                    Tu sistema está actualmente protegido. Necesitarás el código
+                    de tu celular para eliminar cualquier copia de seguridad.
+                  </p>
+
+                  <div
+                    class="security-status"
+                    :class="{ enabled: is2FAEnabled }"
+                  >
+                    Estado:
+                    <strong>{{
+                      is2FAEnabled ? "ACTIVADO" : "DESACTIVADO"
+                    }}</strong>
+                  </div>
+
+                  <button class="btn-primary btn-lg" @click="iniciar2FASetup">
+                    {{
+                      is2FAEnabled
+                        ? "Re-configurar Authenticator"
+                        : "Activar Protección Ahora"
+                    }}
+                  </button>
+
+                  <div class="security-footer-info">
+                    <p>
+                      Funciona con cualquier aplicación de códigos (Google
+                      Authenticator, Authy, Microsoft, etc.). No requiere
+                      conexión a internet para verificar.
+                    </p>
+                  </div>
                 </div>
 
-                <table v-else class="backups-table">
-                  <thead>
-                    <tr>
-                      <th>Nombre del Archivo</th>
-                      <th>Fecha</th>
-                      <th>Tamaño</th>
-                      <th>Acción</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr v-for="file in backupsDrive" :key="file.id">
-                      <td>{{ file.name }}</td>
-                      <td>{{ new Date(file.createdTime).toLocaleString() }}</td>
-                      <td>{{ (Number(file.size) / 1024 / 1024).toFixed(2) }} MB</td>
-                      <td>
-                        <button class="btn-danger btn-sm" @click="restoreBackupDrive(file.id)" :disabled="loadingDrive">
-                          Restaurar
-                        </button>
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
+                <div class="sync-card danger-zone">
+                  <h3>Cerrar Sesión de Drive</h3>
+                  <p>
+                    Si desvinculas la cuenta, todas las funciones de nube se
+                    desactivarán.
+                  </p>
+                  <button class="btn-unlink-big" @click="signoutDrive">
+                    Cerrar Sesión en Google Drive
+                  </button>
+                </div>
+
+                <!-- --- BOTÓN DE EMERGENCIA (BORRAR DESPUÉS DE USAR) --- -->
+                <div
+                  class="sync-card emergency-zone"
+                  style="
+                    margin-top: 20px;
+                    border: 2px dashed #ef4444;
+                    background: #fff1f2;
+                  "
+                >
+                  <h3 style="color: #b91c1c">
+                    🚨 ZONA DE EMERGENCIA (DESARROLLO)
+                  </h3>
+                  <p style="color: #7f1d1d; font-size: 13px">
+                    Usa esto SOLO si perdiste el celular y NO tienes códigos de
+                    recuperación. Esto borrará toda protección 2FA de la base de
+                    datos.
+                  </p>
+                  <button
+                    class="btn-danger btn-lg"
+                    style="
+                      width: 100%;
+                      margin-top: 10px;
+                      background: #ef4444;
+                      color: white;
+                      border: none;
+                    "
+                    @click="forzarResetMaestro"
+                  >
+                    FORZAR RESETEO MAESTRO DE 2FA
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -2474,6 +3226,164 @@ watch(seccionActiva, (newVal) => {
       </main>
     </div>
   </div>
+
+  <!-- --- MODALES DE SEGURIDAD 2FA --- -->
+
+  <!-- Modal de Configuración (QR) -->
+  <div v-if="show2FASetupModal" class="modal-overlay">
+    <div class="modal-box setup-2fa-box">
+      <h3>Seguridad: Vincular Authenticator</h3>
+      <p>
+        Escanea este código QR con tu aplicación (Google Authenticator, Authy,
+        etc.) para habilitar el borrado seguro.
+      </p>
+
+      <div v-if="setup2FAData" class="qr-container">
+        <img :src="setup2FAData.qr" alt="QR 2FA" class="qr-image" />
+        <div class="secret-display">
+          <span>O ingresa esta clave manualmente:</span>
+          <code>{{ setup2FAData.secret }}</code>
+        </div>
+      </div>
+
+      <div class="verify-setup">
+        <label
+          >Para confirmar, ingresa el código de 6 dígitos que ves en tu
+          móvil:</label
+        >
+        <input
+          v-model="input2FACode"
+          type="text"
+          maxlength="6"
+          placeholder="000000"
+          class="totp-input"
+          @keyup.enter="confirmar2FASetup"
+        />
+      </div>
+
+      <div class="modal-actions">
+        <button
+          class="btn-secondary"
+          @click="show2FASetupModal = false"
+          :disabled="verificando2FA"
+        >
+          Cancelar
+        </button>
+        <button
+          class="btn-primary"
+          @click="confirmar2FASetup"
+          :disabled="verificando2FA || input2FACode.length < 6"
+        >
+          {{ verificando2FA ? "Verificando..." : "Confirmar Vínculo" }}
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal de Códigos de Recuperación -->
+  <div v-if="showRecoveryModal" class="modal-overlay">
+    <div class="modal-box recovery-codes-box">
+      <div class="security-header success">
+        <div class="security-icon">✅</div>
+        <h3>Seguridad Activada: Llave Maestra</h3>
+      </div>
+      <p>
+        Google Authenticator se vinculó con éxito. Para máxima seguridad, se ha
+        generado una <strong>Llave Maestra Encriptada</strong>. Este archivo es
+        la ÚNICA forma de recuperar el acceso si pierdes tu celular. Nadie más
+        podrá leerla.
+      </p>
+
+      <div class="key-preview-box">
+        <div class="key-icon">📦</div>
+        <div class="key-status">
+          Llave Maestra Generada (Protegida por AES-256)
+        </div>
+      </div>
+
+      <div class="modal-actions-vertical">
+        <button
+          class="btn-secondary btn-full"
+          @click="descargarCodigosRecuperacion"
+        >
+          📥 Descargar Llave Maestra (.key)
+        </button>
+
+        <button
+          v-if="haDescargadoCodigos"
+          class="btn-primary btn-full animate-fade-in"
+          @click="finalizarConfiguracion2FA"
+        >
+          He guardado mi archivo y deseo finalizar
+        </button>
+
+        <p v-else class="status-warning-text">
+          ⚠️ Debes descargar el archivo para habilitar la finalización.
+        </p>
+
+        <div v-if="subiendoADrive" class="drive-status-info">
+          <div class="mini-spinner"></div>
+          <span>Subiendo copia a Google Drive...</span>
+        </div>
+        <div v-if="subidaDriveExitosa" class="drive-status-info success">
+          <span>✅ Copia en Google Drive guardada</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div v-if="show2FAVerifyModal" class="modal-overlay">
+    <div
+      class="modal-box security-verify-box"
+      @dragover.prevent
+      @drop="handleKeyFileDrop"
+    >
+      <div class="security-header">
+        <div class="security-icon">🛡️</div>
+        <h3>{{ modalSeguridadTitulo }}</h3>
+      </div>
+      <p v-html="modalSeguridadMensaje"></p>
+
+      <div class="master-key-shortcut" @click="cargarLlaveMaestra">
+        <span
+          >📦
+          {{
+            verificando2FA
+              ? "Leyendo Llave Maestra..."
+              : "Importar Llave Maestra (.key)"
+          }}</span
+        >
+      </div>
+
+      <input
+        v-model="input2FACode"
+        type="text"
+        maxlength="6"
+        placeholder="000000"
+        class="totp-input big"
+        @keyup.enter="procesarEliminacionCon2FA"
+        autofocus
+      />
+
+      <div class="modal-actions">
+        <button
+          class="btn-secondary"
+          @click="show2FAVerifyModal = false"
+          :disabled="verificando2FA"
+        >
+          Cancelar
+        </button>
+        <button
+          class="btn-danger"
+          @click="procesarEliminacionCon2FA"
+          :disabled="verificando2FA || input2FACode.length < 6"
+        >
+          {{ verificando2FA ? "Verificando..." : "Confirmar Borrado" }}
+        </button>
+      </div>
+    </div>
+  </div>
+
   <div v-if="modalExportacion.visible" class="modal-overlay">
     <div class="modal-box" style="position: relative">
       <h3>Exportar datos</h3>
@@ -3078,7 +3988,7 @@ watch(seccionActiva, (newVal) => {
   border-radius: 50%;
   border: 2px solid var(--accent-color);
   object-fit: cover;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
 .user-details {
@@ -3522,7 +4432,8 @@ watch(seccionActiva, (newVal) => {
   background: #fdfdfd;
 }
 
-.list-empty, .list-loading {
+.list-empty,
+.list-loading {
   padding: 48px;
   text-align: center;
   color: #6b7280;
@@ -3583,5 +4494,429 @@ watch(seccionActiva, (newVal) => {
   justify-content: center;
   font-size: 1.5rem;
   font-weight: 700;
+}
+
+.location-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  background-color: #f0f4f8;
+  color: #2d3748;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  border: 1px solid #d1d9e6;
+  white-space: nowrap;
+}
+
+[theme="dark"] .location-badge {
+  background-color: #2d3748;
+  color: #edf2f7;
+  border-color: #4a5568;
+}
+.row-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.btn-delete {
+  padding: 6px !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #a0aec0 !important;
+  border: 1px solid #e2e8f0 !important;
+  background: white !important;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-delete:hover {
+  color: #e53e3e !important;
+  border-color: #feb2b2 !important;
+  background: #fff5f5 !important;
+}
+
+.btn-delete:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.icon-trash {
+  width: 18px;
+  height: 18px;
+}
+.mini-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(0, 0, 0, 0.1);
+  border-top: 2px solid #ef4444;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.setup-2fa-box,
+.verify-delete-box {
+  text-align: center;
+}
+
+.qr-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 15px;
+  margin: 20px 0;
+  padding: 15px;
+  background: #fdfdfd;
+  border: 1px dashed #ddd;
+  border-radius: 12px;
+}
+
+.qr-image {
+  width: 200px;
+  height: 200px;
+  border: 4px solid #fff;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+}
+
+.secret-display {
+  font-size: 12px;
+  color: #666;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.secret-display code {
+  font-size: 14px;
+  font-weight: 700;
+  color: #222;
+  letter-spacing: 1px;
+}
+
+.totp-input {
+  width: 100%;
+  padding: 12px;
+  font-size: 18px;
+  text-align: center;
+  letter-spacing: 4px;
+  border: 2px solid #e5e7eb;
+  border-radius: 10px;
+  margin-top: 10px;
+  font-weight: 700;
+}
+
+.totp-input.big {
+  font-size: 28px;
+  height: 60px;
+  border-color: #ef4444;
+  color: #ef4444;
+  margin-bottom: 20px;
+}
+
+.totp-input:focus {
+  border-color: #2563eb;
+  outline: none;
+}
+
+.security-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.security-icon {
+  font-size: 40px;
+}
+.sync-tabs {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 20px;
+  border-bottom: 2px solid #e5e7eb;
+  padding-bottom: 10px;
+}
+
+.sync-tab-btn {
+  padding: 10px 20px;
+  border: none;
+  background: transparent;
+  font-weight: 700;
+  cursor: pointer;
+  color: #6b7280;
+  border-radius: 8px;
+  transition: all 0.2s;
+}
+
+.sync-tab-btn.active {
+  background: #2563eb;
+  color: white;
+}
+
+.security-warning-banner {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+  color: #92400e;
+  padding: 15px;
+  border-radius: 12px;
+  margin-bottom: 20px;
+}
+
+.warning-icon {
+  font-size: 24px;
+}
+
+.warning-text strong {
+  color: #b45309;
+}
+
+.profile-mini {
+  padding: 12px !important;
+  margin-bottom: 20px;
+}
+
+.user-info-container-mini {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.user-avatar-mini {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+}
+
+.user-details-mini .user-name-mini {
+  font-weight: 700;
+  font-size: 14px;
+  margin: 0;
+}
+
+.user-details-mini .user-email-mini {
+  font-size: 11px;
+  color: #666;
+  margin: 0;
+}
+
+.security-config-card {
+  padding: 40px !important;
+  text-align: center;
+}
+
+.security-hero-icon {
+  font-size: 60px;
+  margin-bottom: 20px;
+}
+
+.security-status {
+  display: inline-block;
+  padding: 8px 16px;
+  background: #fee2e2;
+  color: #991b1b;
+  border-radius: 20px;
+  font-size: 12px;
+  margin-bottom: 20px;
+}
+
+.security-status.enabled {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.security-footer-info {
+  margin-top: 30px;
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.danger-zone {
+  border: 1px dashed #ef4444 !important;
+  background: #fff5f5 !important;
+  margin-top: 20px;
+}
+
+.btn-unlink-big {
+  background: #fff;
+  border: 1px solid #ef4444;
+  color: #ef4444;
+  padding: 10px 20px;
+  border-radius: 8px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.btn-delete.disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+  filter: grayscale(1);
+}
+
+/* Estilos Drive Status */
+.drive-status-info {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-size: 13px;
+  color: #3b82f6;
+  background: #eff6ff;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid #dbeafe;
+}
+
+.drive-status-info.success {
+  color: #059669;
+  background: #ecfdf5;
+  border-color: #d1fae5;
+  font-weight: 600;
+}
+
+/* Estilos Recovery Codes */
+.recovery-codes-box {
+  max-width: 450px !important;
+  text-align: center;
+}
+
+.security-header.success {
+  margin-bottom: 20px;
+}
+
+.security-header.success .security-icon {
+  background: #ecfdf5;
+  color: #10b981;
+  font-size: 24px;
+}
+
+/* Estilos Mandatorios Recovery */
+.modal-actions-vertical {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.status-warning-text {
+  color: #b45309;
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0;
+  background: #fffbeb;
+  padding: 8px;
+  border-radius: 6px;
+  border: 1px solid #fde68a;
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.4s ease-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Estilos Master Key Shortcut */
+.master-key-shortcut {
+  display: block;
+  width: fit-content;
+  margin: 10px auto 20px auto;
+  padding: 10px 18px;
+  background: #f0f7ff;
+
+  border: 1px dashed #3b82f6;
+  border-radius: 8px;
+  cursor: pointer;
+  color: #2563eb;
+  font-size: 13px;
+  font-weight: 600;
+  transition: all 0.2s;
+  display: inline-block;
+}
+
+.master-key-shortcut:hover {
+  background: #dbeafe;
+  color: #1d4ed8;
+  transform: translateY(-1px);
+}
+
+.key-preview-box {
+  background: #0f172a;
+  border-radius: 12px;
+  padding: 30px 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 15px;
+  margin: 20px 0;
+  border: 1px solid #334155;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+.key-icon {
+  font-size: 40px;
+  filter: drop-shadow(0 0 8px #3b82f6);
+}
+
+.key-status {
+  color: #94a3b8;
+  font-family: "Courier New", Courier, monospace;
+  font-size: 13px;
+  text-align: center;
+  letter-spacing: 0.5px;
+}
+
+.recovery-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 15px;
+  background: #fff;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.code-number {
+  color: #94a3b8;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.code-text {
+  font-family: "Courier New", Courier, monospace;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: #1e293b;
+  font-size: 18px;
+}
+
+.btn-full {
+  width: 100%;
+  padding: 14px;
+  background: #10b981 !important;
+}
+
+.btn-full:hover {
+  background: #059669 !important;
 }
 </style>

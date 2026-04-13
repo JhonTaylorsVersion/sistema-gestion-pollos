@@ -14,18 +14,23 @@ import JSZip from "jszip";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeFile } from "@tauri-apps/plugin-fs";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { useDrive } from "./useDrive";
+import { useDrive, isDirty } from "./useDrive";
+
+const isInternalAction = ref(false);
+
 
 export function useSheets() {
   let db = null;
 
-  const isDirty = ref(false);
 
   const {
     isAuthenticated: isCloudAuth,
     uploadBackup,
     user: googleUser,
+    loading: isCloudLoading,
   } = useDrive();
+
+
 
   const initDB = async () => {
 
@@ -2593,14 +2598,163 @@ const crearExcelBuffer = async () => {
     mensaje: "",
   });
 
+  const loadBatchFromDB = async (conjuntoId) => {
+    try {
+      const database = await initDB();
+      
+      // 1. Cargar datos del conjunto
+      const conjuntos = await database.select(
+        "SELECT * FROM conjuntos WHERE id = ?",
+        [conjuntoId]
+      );
+      
+      if (!conjuntos || conjuntos.length === 0) return false;
+      
+      const c = conjuntos[0];
+      conjunto.value = {
+        id: c.id,
+        nombre: c.nombre,
+        descripcion: c.descripcion || ""
+      };
+
+      // 2. Cargar las hojas (galpones) del conjunto
+      const sheetsRows = await database.select(
+        "SELECT * FROM sheets WHERE conjunto_id = ? ORDER BY nombre ASC, id ASC",
+        [conjuntoId]
+      );
+
+      if (sheetsRows && sheetsRows.length > 0) {
+        const loadedSheets = [];
+        
+        for (const sRow of sheetsRows) {
+          // 3. Cargar las filas de cada hoja
+          const filasRows = await database.select(
+            "SELECT * FROM filas WHERE sheet_id = ? ORDER BY dia ASC",
+            [sRow.id]
+          );
+
+          // Mapeamos de DB a formato de la app
+          const filas = filasRows.map(f => ({
+            id: f.id,
+            dia: f.dia,
+            semana: f.semana,
+            fecha: f.fecha || "",
+            alimentoCant: f.alimento_cant || "",
+            alimentoDiario: f.alimento_diario || "",
+            alimentoAcum: f.alimento_acum || "",
+            medicina: f.medicina || "",
+            gasDiario: f.gas_diario || "",
+            gasAcum: f.gas_acum || "",
+            mortDiaria: f.mort_diaria || "",
+            mortAcum: f.mort_acum || "",
+            mortPorcentaje: f.mort_porcentaje || "",
+            observacion: f.observacion || ""
+          }));
+
+          // Si por alguna razón faltan filas, completamos hasta 56 (TOTAL_DIAS)
+          if (filas.length < TOTAL_DIAS) {
+            const faltantes = TOTAL_DIAS - filas.length;
+            const inicioDia = filas.length > 0 ? filas[filas.length - 1].dia + 1 : 1;
+            for(let i=0; i < faltantes; i++) {
+              const d = inicioDia + i;
+              filas.push({
+                dia: d,
+                semana: Math.floor((d-1) / 7) + 1,
+                fecha: "",
+                alimentoCant: "", alimentoDiario: "", alimentoAcum: "",
+                medicina: "", gasDiario: "", gasAcum: "",
+                mortDiaria: "", mortAcum: "", mortPorcentaje: "",
+                observacion: ""
+              });
+            }
+          }
+
+          const sheetObj = {
+            id: sRow.id,
+            conjuntoId: sRow.conjunto_id,
+            nombre: sRow.nombre,
+            form: {
+              granja: sRow.granja || "",
+              lote: sRow.lote || "",
+              galpon: sRow.galpon || "",
+              fechaIngreso: sRow.fecha_ingreso || "",
+              procedencia: sRow.procedencia || "",
+              cantidad: sRow.cantidad || ""
+            },
+            filas: filas
+          };
+
+          // Recalculamos para que todas las tablas de resumen estén listas
+          recalcularSheet(sheetObj);
+          loadedSheets.push(sheetObj);
+        }
+
+        sheets.value = loadedSheets;
+        activeTab.value = 0;
+        selectedTabs.value = [0];
+        return true;
+      }
+      return false;
+    } catch (error) {
+      console.error("❌ Error cargando lote desde DB:", error);
+      return false;
+    }
+  };
+
+  const loadLatestBatchFromDB = async () => {
+    try {
+      const database = await initDB();
+      // Buscamos el ID del último conjunto creado
+      const results = await database.select(
+        "SELECT id FROM conjuntos ORDER BY rowid DESC LIMIT 1"
+      );
+      
+      if (results && results.length > 0) {
+        const lastBatchId = results[0].id;
+        
+        // --- VALIDACIÓN DE MES/AÑO PARA RENOVACIÓN MENSUAL ---
+        const meses = ["ENE", "FEB", "MAR", "ABR", "MAY", "JUN", "JUL", "AGO", "SEP", "OCT", "NOV", "DIC"];
+        const mesActualStr = meses[new Date().getMonth()];
+        const añoActual = new Date().getFullYear();
+        const sufijoActual = `${mesActualStr}-${añoActual}`;
+
+        // El ID tiene formato "LOTE01:ABR-2026"
+        const partes = lastBatchId.split(":");
+        const sufijoLastBatch = partes.length > 1 ? partes[1] : "";
+
+        if (sufijoLastBatch !== sufijoActual) {
+          console.log(`📅 [useSheets] Cambio de mes detectado (${sufijoLastBatch} -> ${sufijoActual}). Iniciando mes limpio.`);
+          return; // No cargamos, se queda el estado vacío por defecto
+        }
+
+        console.log("🔍 [useSheets] Iniciando auto-carga de lote del mes actual:", lastBatchId);
+        const success = await loadBatchFromDB(lastBatchId);
+        if (success) {
+          console.log("✅ [useSheets] Lote cargado automáticamente con éxito.");
+        }
+      } else {
+        console.log("ℹ️ [useSheets] No hay lotes previos para cargar.");
+      }
+    } catch (error) {
+      console.error("❌ Error en auto-carga inicial:", error);
+    }
+  };
+
+
   const guardar = async (esManual = false) => {
+
+    // Si ya estamos en medio de una acción interna, evitamos redundancia
+    if (isInternalAction.value) return;
+
     // Asegurarnos de que sea un booleano puro (los botones a veces envían el objeto del evento)
     const manual = esManual === true;
 
     if (!currentSheet.value) return;
 
     try {
+      isInternalAction.value = true; // 🔇 ACTIVAR SILENCIADOR
       const database = await initDB();
+
       recalcularSheet(currentSheet.value);
       const sheet = currentSheet.value;
 
@@ -2696,8 +2850,11 @@ const crearExcelBuffer = async () => {
           ? "Error al guardar manualmente"
           : "Ocurrió un error al guardar automáticamente",
       };
+    } finally {
+      isInternalAction.value = false; // 🔊 DESACTIVAR SILENCIADOR
     }
   };
+
 
   // --- LÓGICA DE AUTOGUARDADO Y AUTOCÁLCULO ---
   let timerAutoguardado = null;
@@ -2705,7 +2862,10 @@ const crearExcelBuffer = async () => {
   watch(
     [sheets, conjunto],
     () => {
+      if (isInternalAction.value) return; // 🔇 Silenciar si es una acción interna
+      
       // Limpiamos el mensaje si el usuario empieza a editar de nuevo
+
       if (estadoGuardado.value.tipo.includes("exito")) {
         estadoGuardado.value = { tipo: "idle", mensaje: "" };
       }
@@ -2725,10 +2885,12 @@ const crearExcelBuffer = async () => {
   watch(
     [sheets, conjunto],
     () => {
+      if (isInternalAction.value) return; // Si es cambio interno, no marcamos como sucio
       isDirty.value = true;
     },
     { deep: true },
   );
+
 
 
   const getTotalAlimentoSheet = (sheet) =>
@@ -3365,9 +3527,12 @@ const crearExcelBuffer = async () => {
   onMounted(async () => {
     try {
       await initDB();
+      // 🔥 AUTO-RESCATE: Cargamos el último lote guardado al arrancar
+      await loadLatestBatchFromDB();
     } catch (error) {
       console.error("Error inicializando SQLite:", error);
     }
+
     window.addEventListener("blur", marcarBlurVentana);
     window.addEventListener("focus", marcarFocusVentana);
     window.addEventListener("click", handleGlobalClick);
@@ -3756,7 +3921,13 @@ const crearExcelBuffer = async () => {
     uploadBackup,
     isDirty,
     googleUser,
+    isCloudLoading,
+    isCloudAuth,
     estadoGuardado,
+    loadBatchFromDB,
+    loadLatestBatchFromDB,
+
+
     setTableWrapperRef,
     pasoExportacion,
     galponesAExportar,

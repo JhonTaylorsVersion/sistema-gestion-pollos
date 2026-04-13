@@ -1,9 +1,18 @@
 <script setup>
-import { ref, onMounted, watch } from "vue";
+import { ref, onMounted, onUnmounted, nextTick, watch, watchEffect } from "vue";
 import { useSheets } from "./composables/useSheets";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 const handleConfigClick = async () => {
+  // --- SEGURIDAD: Sincronizar antes de abrir el panel si hay cambios ---
+  if (isDirty.value) {
+    console.log(
+      "⚠️ Cambios detectados. Forzando sincronización antes de abrir el panel...",
+    );
+    // Usamos el modo manual o forzado para ignorar el cooldown de 30s
+    await uploadBackup(false, true);
+  }
+
   const existing = await WebviewWindow.getByLabel("panel-config");
 
   if (existing) {
@@ -185,30 +194,33 @@ const {
   abrirExportacion,
   exportarDatos,
   exportando,
+  isCloudAuth,
+  isCloudLoading,
 } = useSheets();
 
 onMounted(async () => {
   setTableWrapperRef(tableWrapperRef);
-  
+
   // Lógica de Sincronización al cerrar
   const appWindow = getCurrentWindow();
   await appWindow.onCloseRequested(async (event) => {
     if (isDirty.value) {
-      console.log("⚠️ Cierre detectado con cambios pendientes. Sincronizando...");
+      console.log(
+        "⚠️ Cierre detectado con cambios pendientes. Sincronizando...",
+      );
       // Detenemos el cierre momentáneamente
       event.preventDefault();
-      
+
       // Mostramos un mensaje visual si es posible o simplemente forzamos el backup
       // Al ser un proceso rápido de PATCH, suele tardar menos de 1-2 segundos
       await uploadBackup(false, true); // force = true para saltar cooldown
-      
+
       // Limpiamos la bandera para evitar bucles y cerramos
       isDirty.value = false;
       await appWindow.close();
     }
   });
 });
-
 </script>
 
 <template>
@@ -245,6 +257,81 @@ onMounted(async () => {
       </button>
 
       <div class="tabs-actions-right">
+        <!-- INDICADOR DE SINCRONIZACIÓN -->
+        <div
+          class="sync-status"
+          :title="
+            !isCloudAuth
+              ? 'Google Drive no vinculado'
+              : isCloudLoading
+                ? 'Sincronizando...'
+                : isDirty
+                  ? 'Pendiente de sincronizar'
+                  : 'Sincronizado con Drive'
+          "
+        >
+          <!-- Estado: No autenticado -->
+          <svg
+            v-if="!isCloudAuth"
+            class="sync-icon-status disconnected"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="#94a3b8"
+            stroke-width="2.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M17.58 19H14a2 2 0 1 1-2-2"></path>
+            <path d="m2 2 20 20"></path>
+            <path
+              d="M10.34 4.46a4 4 0 0 1 7.27 2M21 15a4 4 0 0 0-3-3.87"
+            ></path>
+            <path d="M5 15a4 4 0 0 1 5.31-3.75"></path>
+          </svg>
+          <!-- Estado: Sincronizando (Cargando) -->
+          <svg
+            v-else-if="isCloudLoading"
+            class="sync-icon-status spin"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="#3b82f6"
+            stroke-width="2.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <polyline points="23 4 23 10 17 10"></polyline>
+            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+          </svg>
+          <!-- Estado: Pendiente (Dirty) -->
+          <svg
+            v-else-if="isDirty"
+            class="sync-icon-status pending"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="#f59e0b"
+            stroke-width="2.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <circle cx="12" cy="12" r="10"></circle>
+            <polyline points="12 6 12 12 16 14"></polyline>
+          </svg>
+          <!-- Estado: Éxito (Sincronizado) -->
+          <svg
+            v-else
+            class="sync-icon-status success"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="#10b981"
+            stroke-width="2.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+            <polyline points="22 4 12 14.01 9 11.01"></polyline>
+          </svg>
+        </div>
+
         <button
           class="tab-config"
           @click="abrirExportacion"

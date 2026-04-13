@@ -1285,3 +1285,50 @@ body.is-resizing-row * {
 .tab-config:hover .tab-config-icon {
   transform: rotate(20deg);
 }
+
+/* --- MONITOR DE SINCRONIZACIÓN (V3 Flash) --- */
+.sync-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  background: #ffffff;
+  cursor: help;
+  transition: all 0.2s ease;
+}
+
+.sync-status:hover {
+  background: #f8fafc;
+  border-color: #94a3b8;
+}
+
+.sync-icon-status {
+  width: 22px;
+  height: 22px;
+}
+
+.sync-icon-status.spin {
+  animation: spin-cloud 2s linear infinite;
+}
+
+.sync-icon-status.pending {
+  filter: drop-shadow(0 0 3px rgba(245, 158, 11, 0.4));
+}
+
+.sync-icon-status.disconnected {
+  opacity: 0.5;
+}
+
+.sync-icon-status.success {
+  filter: drop-shadow(0 0 3px rgba(16, 185, 129, 0.4));
+}
+
+
+@keyframes spin-cloud {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+

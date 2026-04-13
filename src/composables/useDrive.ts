@@ -1,4 +1,5 @@
-import { ref, onMounted } from "vue";
+import { ref, onMounted, computed } from "vue";
+
 import { invoke } from "@tauri-apps/api/core";
 import { ask, message } from "@tauri-apps/plugin-dialog";
 import { fetch } from "@tauri-apps/plugin-http";
@@ -31,21 +32,42 @@ const refreshToken = ref<string | null>(localStorage.getItem("google_refresh_tok
 
 const lastAutoUploadTime = ref<number>(0);
 const dailyFileId = ref<string | null>(null);
+let deferredTimer: any = null;
+
+export const isDirty = ref(false);
+
+console.log("💿 useDrive.ts: Cargando estado global. Token:", localStorage.getItem("google_access_token") ? "PRESENTE" : "AUSENTE");
+
+
+
 
 export function useDrive() {
 
 
-  const login = async () => {
+  const login = async (force: boolean = false) => {
+    // 🛡️ GUARDIA: Si ya hay un login en curso, no permitir otro para evitar conflictos de puertos
+    if (loading.value) {
+      console.warn("⚠️ [useDrive] Intento de login duplicado bloqueado para evitar conflictos.");
+      return false;
+    }
+
     try {
       loading.value = true;
-      const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${CLIENT_ID}&redirect_uri=${REDIRECT_URI}&response_type=code&scope=${SCOPES}&access_type=offline&prompt=consent`;
+      const promptValue = force ? "select_account login" : "consent";
+      const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${CLIENT_ID}&redirect_uri=${REDIRECT_URI}&response_type=code&scope=${SCOPES}&access_type=offline&prompt=${promptValue}`;
 
-      // Lanzar el navegador desde el frontend
+      // 1. Iniciamos el servidor de escucha (sin esperar el await aún)
+      // Esto asegura que la app ya esté "escuchando" cuando el navegador se abra
+      const serverTask = invoke<string>("start_oauth_server", { authUrlBase: authUrl });
+
+      // 2. Lanzar el navegador desde el frontend
       await openUrl(authUrl);
 
-      const code = await invoke<string>("start_oauth_server", { authUrlBase: authUrl });
+      // 3. Ahora sí esperamos el código de autorización
+      const code = await serverTask;
       
       const response = await fetch("https://oauth2.googleapis.com/token", {
+
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams({
@@ -62,17 +84,22 @@ export function useDrive() {
       if (data.access_token) {
         setTokens(data.access_token, data.refresh_token);
         await fetchUserInfo();
+        return true;
       }
+      return false;
     } catch (error) {
       console.error("Login Error:", error);
       await message("Error al iniciar sesión con Google. Por favor, verifica tu conexión o intenta de nuevo.", {
         title: "Error de Conexión",
         kind: "error",
       });
+      return false;
     } finally {
       loading.value = false;
     }
   };
+
+
 
   const setTokens = (access: string, refresh?: string) => {
     accessToken.value = access;
@@ -163,26 +190,110 @@ export function useDrive() {
     }
   };
 
-  const listBackups = async () => {
+  const listBackups = async (silent = false) => {
     try {
-      loading.value = true;
+      if (!silent) loading.value = true;
+      // IMPORTANTE: Codificamos el query para evitar errores de interpretación (espacios -> %20)
+      const query = "name contains 'pollos_backup_' and trashed = false";
       const response = await fetchWithAuth(
-        "https://www.googleapis.com/drive/v3/files?q=name contains 'pollos_backup_' and trashed = false&orderBy=createdTime desc&fields=files(id, name, createdTime, size)"
+        `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&orderBy=createdTime desc&fields=files(id, name, createdTime, size)`
       );
       const data = await response.json() as any;
       backups.value = data.files || [];
+      
+      // Si el archivo que teníamos en caché para hoy no aparece en la lista fresca, lo olvidamos
+      const dateStr = new Date().toISOString().slice(0, 10);
+      const todayFileName = `pollos_backup_${dateStr}.db`;
+      const existsInList = backups.value.some(f => f.name === todayFileName);
+      if (!existsInList) {
+        dailyFileId.value = null;
+      }
     } catch (error) {
       console.error("List Backups Error:", error);
     } finally {
-      loading.value = false;
+      if (!silent) loading.value = false;
     }
   };
 
-  const findTodayBackup = async (fileName: string) => {
+
+
+  // --- NUEVA LÓGICA DE CARPETAS ---
+  const currentMonthFolderId = ref<string | null>(null);
+
+  const getOrCreateFolder = async (name: string, parentId?: string) => {
+    try {
+      let query = `name = '${name}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
+      if (parentId) {
+        query += ` and '${parentId}' in parents`;
+      }
+      
+      const response = await fetchWithAuth(
+        `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id)`
+      );
+      const data = await response.json() as any;
+      
+      if (data.files && data.files.length > 0) {
+        return data.files[0].id;
+      }
+
+      // NO EXISTE: Crear
+      console.log(`📁 Creando carpeta: ${name}`);
+      const metadata: any = {
+        name,
+        mimeType: "application/vnd.google-apps.folder",
+      };
+      if (parentId) metadata.parents = [parentId];
+
+      const createResponse = await fetchWithAuth(
+        "https://www.googleapis.com/drive/v3/files",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(metadata),
+        }
+      );
+      const createdData = await createResponse.json() as any;
+      return createdData.id;
+    } catch (e) {
+      console.error(`Error en getOrCreateFolder (${name}):`, e);
+      return null;
+    }
+  };
+
+  const ensureFolderHierarchy = async () => {
+    // Si ya lo tenemos de esta sesión, no repetimos
+    if (currentMonthFolderId.value) return currentMonthFolderId.value;
+
+    try {
+      // 1. Root
+      const rootId = await getOrCreateFolder("SistemaGestionPollos_Backups");
+      if (!rootId) return null;
+
+      // 2. Año
+      const yearStr = new Date().getFullYear().toString();
+      const yearId = await getOrCreateFolder(yearStr, rootId);
+      if (!yearId) return null;
+
+      // 3. Mes
+      const mesesFull = ["ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO", "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"];
+      const mesActualStr = mesesFull[new Date().getMonth()];
+      const monthId = await getOrCreateFolder(mesActualStr, yearId);
+      
+      currentMonthFolderId.value = monthId;
+      return monthId;
+    } catch (e) {
+      console.error("Error asegurando jerarquía de carpetas:", e);
+      return null;
+    }
+  };
+
+  const findTodayBackup = async (fileName: string, parentId?: string) => {
     if (dailyFileId.value) return dailyFileId.value;
 
     try {
-      const query = `name = '${fileName}' and trashed = false`;
+      let query = `name = '${fileName}' and trashed = false`;
+      if (parentId) query += ` and '${parentId}' in parents`;
+
       const response = await fetchWithAuth(
         `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id)`
       );
@@ -197,31 +308,53 @@ export function useDrive() {
     return null;
   };
 
+
   const uploadBackup = async (manual = true, force = false) => {
     if (!accessToken.value) return;
 
-    // Cooldown para automáticos (5 minutos = 300000 ms)
     const now = Date.now();
-    if (!manual && !force && (now - lastAutoUploadTime.value < 300000)) {
-       console.log("☁️ Sincronización omitida (cooldown de 5 min activo)");
+    const COOLDOWN_TIME = 500; // ⚡ Sincronización casi instantánea
+
+    if (!manual && !force && (now - lastAutoUploadTime.value < COOLDOWN_TIME)) {
+       if (deferredTimer) return;
+
+       const remaining = (COOLDOWN_TIME + 100) - (now - lastAutoUploadTime.value);
+       deferredTimer = setTimeout(() => {
+         deferredTimer = null;
+         uploadBackup(false, true);
+       }, remaining);
+
        return;
+    }
+
+    if (deferredTimer) {
+      clearTimeout(deferredTimer);
+      deferredTimer = null;
     }
 
     try {
       loading.value = true;
+      
+      // 📂 Asegurar carpetas Raíz -> Año -> Mes
+      const folderId = await ensureFolderHierarchy();
+      if (!folderId) {
+        console.warn("⚠️ No se pudo obtener la carpeta destino en Drive.");
+      }
+
       const dbPath = await invoke<string>("get_db_path");
       const dbContent = await readFile(dbPath);
       
       const dateStr = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
       const fileName = `pollos_backup_${dateStr}.db`;
 
-      const existingId = await findTodayBackup(fileName);
+      // Buscamos el archivo preferiblemente dentro de la carpeta del mes
+      const existingId = await findTodayBackup(fileName, folderId || undefined);
 
       let response;
 
       if (existingId) {
         // ACTUALIZAR (PATCH)
-        console.log(`☁️ Actualizando backup de hoy ID: ${existingId}`);
+        console.log(`☁️ Actualizando backup diario en carpeta mensual ID: ${existingId}`);
         response = await fetchWithAuth(
           `https://www.googleapis.com/upload/drive/v3/files/${existingId}?uploadType=media`,
           {
@@ -230,12 +363,13 @@ export function useDrive() {
           }
         );
       } else {
-        // CREAR (POST Multipart)
-        console.log(`☁️ Creando nuevo backup diario: ${fileName}`);
-        const metadata = {
+        // CREAR (POST Multipart) con el parent folder
+        console.log(`☁️ Creando nuevo backup diario en carpeta mensual: ${fileName}`);
+        const metadata: any = {
           name: fileName,
           mimeType: "application/octet-stream",
         };
+        if (folderId) metadata.parents = [folderId];
 
         const formData = new FormData();
         formData.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
@@ -255,6 +389,8 @@ export function useDrive() {
 
       if (response.ok) {
         lastAutoUploadTime.value = Date.now();
+        isDirty.value = false; // Reset glocal dirty flag
+
         if (manual) {
           await message(`Copia de seguridad ${existingId ? 'actualizada' : 'subida'} con éxito a Google Drive.`, {
             title: "Backup Exitoso",
@@ -262,6 +398,7 @@ export function useDrive() {
           });
         }
         await listBackups();
+        isDirty.value = false; // ✅ ELAVISO DE ENTREGA
         return true;
       } else {
         throw new Error("Fallo en la comunicación con Google Drive.");
@@ -281,9 +418,50 @@ export function useDrive() {
     }
   };
 
+  // ... (restoreBackup logic) ...
 
+
+
+
+  const uploadFile = async (file: File) => {
+    if (!accessToken.value) return;
+    try {
+      loading.value = true;
+      const folderId = await ensureFolderHierarchy();
+      
+      const metadata: any = {
+        name: file.name,
+        mimeType: file.type || "application/octet-stream",
+      };
+      if (folderId) metadata.parents = [folderId];
+
+      const formData = new FormData();
+      formData.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
+      formData.append("file", file);
+
+      const response = await fetchWithAuth(
+        "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart",
+        {
+          method: "POST",
+          body: formData,
+        }
+      );
+
+      if (response.ok) {
+        return true;
+      } else {
+        throw new Error("Error en la respuesta de Google.");
+      }
+    } catch (e) {
+      console.error("uploadFile Error:", e);
+      return false;
+    } finally {
+      loading.value = false;
+    }
+  };
 
   const restoreBackup = async (fileId: string) => {
+
     try {
       const confirmed = await ask("¿Estás seguro? Se reemplazarán todos los datos actuales y la app se reiniciará.", {
         title: "Confirmar Restauración",
@@ -298,7 +476,27 @@ export function useDrive() {
         { responseType: 1 } // Binary
       );
       
+      if (!response.ok) {
+        if (response.status === 404) {
+          await message("El archivo de seguridad ya no existe en Google Drive. Es posible que haya sido eliminado permanentemente desde otro dispositivo.", {
+            title: "Archivo no encontrado",
+            kind: "error",
+          });
+          // Aprovechamos para limpiar la lista
+          await listBackups(true);
+        } else {
+          throw new Error(`Error de descarga (${response.status})`);
+        }
+        return;
+      }
+
       const content = await response.arrayBuffer();
+
+      // Validación extra: si el contenido es demasiado pequeño, probablemente no sea un .db válido
+      if (content.byteLength < 100) {
+        throw new Error("El archivo descargado parece estar corrupto o vacío.");
+      }
+
       const dbPath = await invoke<string>("get_db_path");
       
       await writeFile(dbPath, new Uint8Array(content));
@@ -309,6 +507,7 @@ export function useDrive() {
       });
 
       await invoke("restart_app");
+
     } catch (error) {
       console.error("Restore Error:", error);
       const msg = typeof error === 'string' ? error : (error as Error).message;
@@ -320,6 +519,46 @@ export function useDrive() {
       loading.value = false;
     }
   };
+
+  const deleteBackup = async (fileId: string) => {
+    try {
+      loading.value = true;
+      const response = await fetchWithAuth(
+        `https://www.googleapis.com/drive/v3/files/${fileId}`,
+        { method: "DELETE" }
+      );
+      
+      if (response.ok) {
+        // Refrescamos la lista inmediatamente
+        await listBackups(true);
+        return true;
+      } else {
+        const errorData = await response.json() as any;
+        throw new Error(errorData.error?.message || "Error al eliminar de Drive");
+      }
+    } catch (error) {
+      console.error("Delete Error:", error);
+      throw error;
+    } finally {
+      loading.value = false;
+    }
+  };
+
+  // --- Sincronización entre ventanas ---
+  // Escuchamos cambios en localStorage para actualizar el estado si otra ventana inicia sesión
+  if (typeof window !== 'undefined') {
+    window.addEventListener('storage', (event) => {
+      console.log("📢 [useDrive] Cambios en almacenamiento detectados:", event.key, "->", event.newValue ? "TOKEN PRESENTE" : "BORRADO");
+      if (event.key === 'google_access_token') {
+        accessToken.value = event.newValue;
+        if (event.newValue) fetchUserInfo();
+      }
+      if (event.key === 'google_refresh_token') {
+        refreshToken.value = event.newValue;
+      }
+    });
+  }
+
 
   onMounted(() => {
     if (accessToken.value) {
@@ -335,7 +574,14 @@ export function useDrive() {
     signout,
     listBackups,
     uploadBackup,
+    uploadFile,
     restoreBackup,
-    isAuthenticated: accessToken,
+    deleteBackup,
+    isAuthenticated: computed(() => !!accessToken.value),
+
+    isDirty,
   };
+
+
 }
+
