@@ -24,7 +24,7 @@ const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
 const CLIENT_SECRET = import.meta.env.VITE_GOOGLE_CLIENT_SECRET;
 const REDIRECT_URI = "http://127.0.0.1:14210";
 const SCOPES =
-  "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email";
+  "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.appdata https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email";
 
 const user = ref<GoogleUser | null>(null);
 const loading = ref(false);
@@ -101,6 +101,43 @@ console.log(
   "💿 useDrive.ts: Cargando estado global. Token:",
   localStorage.getItem("google_access_token") ? "PRESENTE" : "AUSENTE",
 );
+
+export async function hashString(str: string): Promise<string> {
+  const msgUint8 = new TextEncoder().encode(str.toUpperCase().trim());
+  const hashBuffer = await crypto.subtle.digest("SHA-256", msgUint8);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+export interface AccountState {
+  schemaVersion: number;
+  cloudAccountId?: string;
+  appAccountInitialized: boolean;
+  twoFactor: {
+    enabled: boolean;
+    confirmed: boolean;
+    method: "totp" | "none";
+    enrolledAt?: string;
+    secretStoredMode: "local_only" | "cloud_encrypted";
+  };
+  recovery: {
+    hasRecoveryCodes: boolean;
+    recoveryCodeHashes?: string[];
+    hasMasterKey: boolean;
+    masterKeyVerifier?: string;
+    updatedAt?: string;
+    failedAttempts: number;
+  };
+  backups: {
+    hasAnyBackup: boolean;
+    lastBackupAt?: string;
+  };
+  devicePolicy: {
+    require2faOnNewInstall: boolean;
+  };
+}
+
+const cloudAccountState = ref<AccountState | null>(null);
 
 export function useDrive() {
   const { mostrarToast } = useNotify();
@@ -661,6 +698,114 @@ export function useDrive() {
     }
   };
 
+  // --- GESTIÓN DE ESTADO DE CUENTA (AppDataFolder) ---
+
+  const fetchAccountState = async () => {
+    try {
+      loading.value = true;
+      console.log("🔍 Buscando estado de cuenta en AppDataFolder...");
+
+      const response = await fetchWithAuth(
+        `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=name='account_state.json'&fields=files(id, name)`,
+      );
+
+      const data = (await response.json()) as any;
+
+      if (data.files && data.files.length > 0) {
+        const fileId = data.files[0].id;
+        const contentResponse = await fetchWithAuth(
+          `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
+        );
+
+        if (contentResponse.ok) {
+          const state = (await contentResponse.json()) as AccountState;
+          cloudAccountState.value = state;
+          console.log("✅ Estado de cuenta recuperado:", state);
+          return state;
+        }
+      }
+
+      console.log("ℹ️ No se encontró un estado de cuenta previo.");
+      cloudAccountState.value = null;
+      return null;
+    } catch (e) {
+      console.error("Error al obtener AccountState:", e);
+      return null;
+    } finally {
+      loading.value = false;
+    }
+  };
+
+  const saveAccountState = async (state: AccountState) => {
+    try {
+      loading.value = true;
+      console.log("💾 Guardando estado de cuenta en AppDataFolder...");
+
+      // 1. Buscar si ya existe para sobrescribir
+      const searchResponse = await fetchWithAuth(
+        `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=name='account_state.json'&fields=files(id)`,
+      );
+      const searchData = (await searchResponse.json()) as any;
+      const existingId =
+        searchData.files && searchData.files.length > 0
+          ? searchData.files[0].id
+          : null;
+
+      const metadata = {
+        name: "account_state.json",
+        mimeType: "application/json",
+        parents: existingId ? undefined : ["appDataFolder"],
+      };
+
+      const formData = new FormData();
+      formData.append(
+        "metadata",
+        new Blob([JSON.stringify(metadata)], { type: "application/json" }),
+      );
+      formData.append(
+        "file",
+        new Blob([JSON.stringify(state)], { type: "application/json" }),
+      );
+
+      let response;
+      if (existingId) {
+        response = await fetchWithAuth(
+          `https://www.googleapis.com/upload/drive/v3/files/${existingId}?uploadType=multipart`,
+          {
+            method: "PATCH",
+            body: formData,
+          },
+        );
+      } else {
+        response = await fetchWithAuth(
+          "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart",
+          {
+            method: "POST",
+            body: formData,
+          },
+        );
+      }
+
+      if (response.ok) {
+        cloudAccountState.value = state;
+        console.log("✅ Estado de cuenta guardado exitosamente.");
+        return true;
+      } else {
+        const errorText = await response.text();
+        console.error("❌ Error de Google Drive al guardar estado:", {
+          status: response.status,
+          body: errorText
+        });
+        throw new Error(`Drive Error ${response.status}: ${errorText}`);
+      }
+    } catch (e) {
+      console.error("🚨 Error crítico al guardar AccountState:", e);
+      return false;
+    } finally {
+      loading.value = false;
+    }
+  };
+
   // --- Sincronización entre ventanas ---
   // Escuchamos cambios en localStorage para actualizar el estado si otra ventana inicia sesión
   if (typeof window !== "undefined") {
@@ -699,6 +844,12 @@ export function useDrive() {
     restoreBackup,
     deleteBackup,
     isAuthenticated: computed(() => !!accessToken.value),
+
+    // Identidad
+    cloudAccountState,
+    fetchAccountState,
+    saveAccountState,
+    hashString,
 
     isDirty,
     syncError,

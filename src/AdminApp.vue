@@ -208,6 +208,23 @@ const input2FACode = ref("");
 const verifyTargetFileId = ref<string | null>(null);
 const verificando2FA = ref(false);
 const llaveValidada = ref(false);
+
+// --- AUTO-VERIFICACIÓN INTELIGENTE (UX MEJORADA) ---
+watch(input2FACode, (newVal) => {
+  // Limpiamos espacios por si acaso
+  const code = newVal.trim();
+  
+  // Si tiene exactamente 6 caracteres y NO estamos en modo soporte/llave
+  // (El modo soporte usa códigos más largos o recovery codes de 8 chars)
+  if (code.length === 6 && !showSupportMode.value && !llaveValidada.value) {
+    if (show2FASetupModal.value) {
+      confirmar2FASetup();
+    } else if (show2FAVerifyModal.value) {
+      procesarEliminacionCon2FA();
+    }
+  }
+});
+
 const currentKeyPath = ref<string | null>(null);
 const subSeccionSync = ref<string>("backups");
 const recoveryCodes = ref<string[]>([]);
@@ -232,6 +249,8 @@ const modalSeguridadTitulo = computed(() => {
     return "Seguridad: Cerrar Sesión";
   return "Verificación de Seguridad";
 });
+
+
 
 const modalSeguridadMensaje = computed(() => {
   if (verifyTargetFileId.value === "RESET_2FA_ACTION")
@@ -431,11 +450,60 @@ const confirmar2FASetup = async () => {
   }
 };
 
+
+
 const finalizarConfiguracion2FA = async () => {
   const db = await initDB();
   await db.execute(
     "UPDATE app_config SET value = 'true' WHERE key = '2fa_confirmed'",
   );
+
+  // --- PERSISTENCIA DE IDENTIDAD EN LA NUBE (NIST-Compliant) ---
+  try {
+    const userEmail = userDrive.value?.email || "unknown";
+
+    // Hasheamos los códigos de recuperación para la nube
+    const hashedCodes = await Promise.all(
+      recoveryCodes.value.map((c) => hashStringDrive(c)),
+    );
+
+    const saved = await saveAccountState({
+      schemaVersion: 1,
+      cloudAccountId: userEmail,
+      appAccountInitialized: true,
+      twoFactor: {
+        enabled: true,
+        confirmed: true,
+        method: "totp",
+        enrolledAt: new Date().toISOString(),
+        secretStoredMode: "local_only",
+      },
+      recovery: {
+        hasRecoveryCodes: true,
+        recoveryCodeHashes: hashedCodes,
+        hasMasterKey: true, // Siempre generamos la llave en este sistema
+        masterKeyVerifier: hashedCodes[0], // Usamos el primer hash como verificador simple para la llave
+        updatedAt: new Date().toISOString(),
+        failedAttempts: 0,
+      },
+      backups: {
+        hasAnyBackup: backupsDrive.value.length > 0,
+        lastBackupAt: new Date().toISOString(),
+      },
+      devicePolicy: {
+        require2faOnNewInstall: true,
+      },
+    });
+
+    if (saved) {
+      console.log("🔒 Identidad Cloud sincronizada con Hashes de Recuperación.");
+    } else {
+      console.warn("⚠️ La identidad Cloud no se pudo sincronizar, pero el 2FA local está activo.");
+    }
+  } catch (e) {
+    console.error("Error al sincronizar identidad en la nube:", e);
+  }
+
   is2FAConfirmed.value = true;
   showRecoveryModal.value = false;
   mostrarToast("Seguridad 2FA configurada y activada correctamente.");
@@ -1920,7 +1988,38 @@ const {
   isDirty: isDirtyDrive, // Añadido para el indicador de estado
   isOnline: isOnlineDrive,
   syncError: syncErrorDrive,
+  // Identidad Cloud
+  cloudAccountState,
+  fetchAccountState,
+  saveAccountState,
+  hashString: hashStringDrive,
 } = useDrive();
+
+// --- GUARDIA DE INTEGRIDAD (NIST-Compliant) ---
+const requiereSeguridadUrgente = computed(() => {
+  // CASO 1: Identidad oficial confirmada en Drive (AppDataFolder)
+  const cloudConfirmed = !!cloudAccountState.value?.twoFactor?.confirmed;
+
+  // CASO 2: Identidad heredada (Backups detectados pero sin manifiesto oficial y sin 2FA local)
+  // Si encontramos backups, asumimos que este usuario "ya existe" y debe protegerse.
+  const legacyMigrationNeeded = !cloudAccountState.value && backupsDrive.value.length > 0;
+
+  return (cloudConfirmed || legacyMigrationNeeded) && !is2FAConfirmed.value;
+});
+
+// Auto-redirigir a la solución si hay inconsistencia
+watch(requiereSeguridadUrgente, (newVal) => {
+  if (newVal) {
+    seccionActiva.value = "sincronizacion";
+    subSeccionSync.value = "seguridad";
+    
+    // Si no estamos ya verificando identidad, abrimos el setup automáticamente
+    if (!show2FAVerifyModal.value && !show2FASetupModal.value) {
+      console.log("🛡️ Iniciando configuración 2FA obligatoria por integridad de cuenta.");
+      iniciar2FASetup();
+    }
+  }
+}, { immediate: true });
 
 const syncStatus = computed(() => {
   if (!authenticatedDrive.value) return "not-linked";
@@ -1967,12 +2066,40 @@ const ejecutarBackupManual = async () => {
 const iniciarLoginConSeguridad = async () => {
   try {
     await loginDrive();
-    // Si se logueó y no está activado 2FA, forzamos el setup
-    if (authenticatedDrive.value && !is2FAConfirmed.value) {
-      mostrarToast(
-        "Conexión exitosa. Por seguridad, configura tu Authenticator.",
-      );
-      iniciar2FASetup();
+
+    if (authenticatedDrive.value) {
+      // 1. EL JUEZ: Consultamos la identidad oficial en Drive (AppDataFolder)
+      const state = await fetchAccountState();
+
+      if (state?.twoFactor?.confirmed) {
+        // CASO B: Reinstalación/Equipo Nuevo - Identidad Confirmada detectada
+        mostrarToast(
+          "Identidad detectada. Ingresa tu código de seguridad para continuar.",
+          "info",
+        );
+        // Preparamos el modal de verificación
+        verifyTargetFileId.value = "LOGIN_IDENTITY_UNLOCK";
+        input2FACode.value = "";
+        llaveValidada.value = false;
+        show2FAVerifyModal.value = true;
+      } else {
+        // 2. Si no hay estado oficial, revisamos backups (Modo Migración Legado)
+        await listBackupsDrive();
+
+        if (backupsDrive.value.length > 0) {
+          // CASO C: Cuenta Heredada (Sin manifiesto pero con datos)
+          mostrarToast(
+            "¡Bienvenido de nuevo! Detectamos copias previas. Restaura tu sistema para reconstruir tu identidad.",
+            "info",
+          );
+        } else {
+          // CASO A: Usuario Nuevo Real
+          mostrarToast(
+            "Conexión exitosa. Por seguridad, configura tu Authenticator.",
+          );
+          iniciar2FASetup();
+        }
+      }
     }
   } catch (err) {
     console.error("Error en login:", err);
@@ -2013,7 +2140,10 @@ const solicitarLogout2FA = () => {
 };
 
 const procesarEliminacionCon2FA = async () => {
-  if (!verifyTargetFileId.value || !twoFactorSecret.value) return;
+  if (!verifyTargetFileId.value) return;
+
+  // Permitimos continuar si hay secreto LOCAL O si hay un estado en la NUBE para validar identidad
+  if (!twoFactorSecret.value && !cloudAccountState.value) return;
 
   try {
     verificando2FA.value = true;
@@ -2027,24 +2157,57 @@ const procesarEliminacionCon2FA = async () => {
       });
     }
 
-    // SI NO ES VÁLIDO TOTP, intentamos como CÓDIGO DE RECUPERACIÓN
+    // SI NO ES VÁLIDO TOTP, intentamos como CÓDIGO DE RECUPERACIÓN (Local o Cloud)
     if (!isValid) {
-      const db = await initDB();
-      const res = await db.select<{ value: string }[]>(
-        "SELECT value FROM app_config WHERE key = '2fa_recovery_codes'",
-      );
-      if (res && res.length > 0) {
-        let codes: string[] = JSON.parse(res[0].value);
-        const index = codes.indexOf(input2FACode.value.toUpperCase());
+      if (verifyTargetFileId.value === "LOGIN_IDENTITY_UNLOCK" && cloudAccountState.value) {
+        // --- VALIDACIÓN CONTRA LA NUBE (REINSTALACIÓN) ---
+        const codeToVerify = input2FACode.value || "";
+        const inputHash = await hashStringDrive(codeToVerify);
+        const hashes = cloudAccountState.value.recovery?.recoveryCodeHashes || [];
+        const index = hashes.indexOf(inputHash);
+
         if (index !== -1) {
           isValid = true;
-          // Quemar código
-          codes.splice(index, 1);
-          await db.execute(
-            "UPDATE app_config SET value = ? WHERE key = '2fa_recovery_codes'",
-            [JSON.stringify(codes)],
-          );
-          recoveryCodes.value = codes;
+          // NIST: Consumo único (Eliminar de la nube inmediatamente)
+          const newState = JSON.parse(JSON.stringify(cloudAccountState.value));
+          if (newState.recovery?.recoveryCodeHashes) {
+            newState.recovery.recoveryCodeHashes.splice(index, 1);
+            newState.recovery.failedAttempts = 0; // Reset intentos fallidos
+            await saveAccountState(newState);
+            console.log("✅ Identidad desbloqueada y código de un solo uso consumido.");
+          }
+        } else {
+          // Incrementar intentos fallidos en la nube (Rate Limiting)
+          const newState = JSON.parse(JSON.stringify(cloudAccountState.value));
+          if (newState.recovery) {
+            newState.recovery.failedAttempts = (newState.recovery.failedAttempts || 0) + 1;
+            await saveAccountState(newState);
+            
+            if (newState.recovery.failedAttempts >= 5) {
+              mostrarToast("Demasiados intentos fallidos. Contacta a soporte.", "error");
+            } else {
+              mostrarToast(`Código incorrecto. Intento ${newState.recovery.failedAttempts}/5`, "error");
+            }
+          }
+        }
+      } else if (twoFactorSecret.value) {
+        // --- VALIDACIÓN LOCAL NORMAL ---
+        const db = await initDB();
+        const res = await db.select<{ value: string }[]>(
+          "SELECT value FROM app_config WHERE key = '2fa_recovery_codes'",
+        );
+        if (res && res.length > 0) {
+          let codes: string[] = JSON.parse(res[0].value);
+          const index = codes.indexOf(input2FACode.value.toUpperCase());
+          if (index !== -1) {
+            isValid = true;
+            codes.splice(index, 1);
+            await db.execute(
+              "UPDATE app_config SET value = ? WHERE key = '2fa_recovery_codes'",
+              [JSON.stringify(codes)],
+            );
+            recoveryCodes.value = codes;
+          }
         }
       }
     }
@@ -2077,7 +2240,21 @@ const procesarEliminacionCon2FA = async () => {
     }
 
     if (isValid) {
-      if (verifyTargetFileId.value === "RESET_2FA_ACTION") {
+      if (verifyTargetFileId.value === "LOGIN_IDENTITY_UNLOCK") {
+        // CASO: DESBLOQUEO EXITOSO TRAS REINSTALACIÓN
+        mostrarToast("¡Identidad validada!", "success");
+        show2FAVerifyModal.value = false;
+        verifyTargetFileId.value = null;
+        
+        // Si después de validar identidad detectamos que no hay 2FA local (reset o reinstalación)
+        // forzamos la configuración inmediata
+        if (requiereSeguridadUrgente.value) {
+          console.log("🛡️ Identidad recuperada, pero falta 2FA local. Forzando configuración.");
+          iniciar2FASetup();
+        } else {
+          seccionActiva.value = "sincronizacion";
+        }
+      } else if (verifyTargetFileId.value === "RESET_2FA_ACTION") {
         // CASO: RESET DE SEGURIDAD
         const database = await initDB();
         await database.execute(
@@ -2137,7 +2314,10 @@ const procesarEliminacionCon2FA = async () => {
       }
 
       // CASO: ELIMINACIÓN DE BACKUP
-      const fileId = verifyTargetFileId.value;
+      const fileId = verifyTargetFileId.value || "";
+      if (!fileId || fileId === "LOGIN_IDENTITY_UNLOCK" || fileId === "SIGNOUT_DRIVE_ACTION" || fileId === "RESET_2FA_ACTION") {
+        return;
+      }
 
       show2FAVerifyModal.value = false;
       verifyTargetFileId.value = null;
@@ -2266,6 +2446,14 @@ const reabrirMain = async () => {
     </div>
 
     <div v-else class="dashboard-page">
+      <!-- --- BANNER DE ALERTA DE SEGURIDAD (INTEGRIDAD) --- -->
+      <div v-if="requiereSeguridadUrgente" class="security-integrity-banner animate-fade-in">
+        <div class="integrity-icon">🔐</div>
+        <div class="integrity-text">
+          <strong>Acceso restringido:</strong> Tu cuenta requiere protección 2FA. Por favor, <strong>restaura tu backup</strong> para recuperar tu clave anterior o <strong>configura una nueva</strong> en el panel de seguridad.
+        </div>
+      </div>
+
       <aside class="sidebar">
         <h2>Panel de Control</h2>
 
@@ -2303,7 +2491,12 @@ const reabrirMain = async () => {
 
         <div class="sidebar-divider"></div>
 
-        <button class="sidebar-btn-back" @click="reabrirMain">
+        <button 
+          class="sidebar-btn-back" 
+          @click="reabrirMain"
+          :disabled="requiereSeguridadUrgente"
+          :title="requiereSeguridadUrgente ? 'Debes configurar o restaurar tu seguridad 2FA primero' : ''"
+        >
           <svg
             viewBox="0 0 24 24"
             fill="none"
@@ -2313,7 +2506,7 @@ const reabrirMain = async () => {
           >
             <polyline points="15 18 9 12 15 6" />
           </svg>
-          Volver al Sistema
+          {{ requiereSeguridadUrgente ? 'Seguridad Requerida' : 'Volver al Sistema' }}
         </button>
 
         <button class="sidebar-btn" @click="cerrarSesion">Cerrar sesión</button>
@@ -3605,6 +3798,7 @@ const reabrirMain = async () => {
 
       <div class="modal-actions">
         <button
+          v-if="!requiereSeguridadUrgente"
           class="btn-secondary"
           @click="show2FASetupModal = false"
           :disabled="verificando2FA"
@@ -3884,6 +4078,7 @@ const reabrirMain = async () => {
 
       <div class="modal-actions">
         <button
+          v-if="!requiereSeguridadUrgente"
           class="btn-secondary"
           @click="show2FAVerifyModal = false"
           :disabled="verificando2FA"
@@ -5220,6 +5415,34 @@ const reabrirMain = async () => {
 
 .btn-delete:disabled {
   opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* BANNER INTEGRIDAD */
+.security-integrity-banner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  background: #991b1b;
+  color: white;
+  padding: 10px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 15px;
+  z-index: 1000;
+  font-size: 13px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+}
+
+.integrity-icon {
+  font-size: 18px;
+}
+
+.sidebar-btn-back:disabled {
+  opacity: 0.4;
+  background: rgba(255, 255, 255, 0.02);
   cursor: not-allowed;
 }
 
