@@ -2,6 +2,7 @@
 import { ref, onMounted, onUnmounted, nextTick, watch, watchEffect } from "vue";
 import { useSheets } from "./composables/useSheets";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import SyncIcon from "./components/SyncIcon.vue";
 
 const isForceClosing = ref(false);
 import { ask } from "@tauri-apps/plugin-dialog";
@@ -393,132 +394,13 @@ onMounted(async () => {
 
       <div class="tabs-actions-right">
         <!-- INDICADOR DE SINCRONIZACIÓN -->
-        <div
-          class="sync-status"
-          :title="
-            !isCloudAuth
-              ? 'Google Drive no vinculado'
-              : !isOnline
-                ? 'Sin conexión a internet (Pausado)'
-                : syncError &&
-                    (syncError.includes('request for url') ||
-                      syncError.includes('timeout') ||
-                      syncError.includes('network') ||
-                      syncError.includes('offline'))
-                  ? 'Fallo de red (Se reintentará al conectar)'
-                  : syncError
-                    ? 'Error de sincronización: ' + syncError
-                    : isCloudLoading
-                      ? 'Sincronizando...'
-                      : isDirty
-                        ? 'Pendiente de sincronizar'
-                        : 'Sincronizado con Drive'
-          "
-        >
-          <!-- Estado: No autenticado (Google Drive No Vinculado) -->
-          <svg
-            v-if="!isCloudAuth"
-            class="sync-icon-status disconnected"
-            viewBox="0 0 24 24"
-            fill="none"
-          >
-            <!-- Logo de Google Drive simplificado -->
-            <path 
-              d="M12.01 1.485c-2.082 0-3.754.02-3.743.047.01.02 1.708 3.001 3.774 6.62l3.76 6.574h3.76c2.081 0 3.753-.02 3.742-.047-.005-.02-1.708-3.001-3.775-6.62l-3.76-6.574zm-4.76 1.73a789.828 789.861 0 0 0-3.63 6.319L0 15.868l1.89 3.298 1.885 3.297 3.62-6.335 3.618-6.33-1.88-3.287C8.1 4.704 7.255 3.22 7.25 3.214zm2.259 12.653-.203.348c-.114.198-.96 1.672-1.88 3.287a423.93 423.948 0 0 1-1.698 2.97c-.01.026 3.24.042 7.222.042h7.244l1.796-3.157c.992-1.734 1.85-3.23 1.906-3.323l.104-.167h-7.249z" 
-              fill="#94a3b8"
-            />
-            <!-- Slash de desconexión -->
-            <line 
-              x1="2" y1="2" x2="22" y2="22" 
-              stroke="#64748b" 
-              stroke-width="2.5" 
-              stroke-linecap="round"
-            />
-          </svg>
-          <!-- Estado: Sin Internet o Error de Red (Cloud Offline) -->
-          <svg
-            v-else-if="
-              !isOnline ||
-              (syncError &&
-                (syncError.includes('request for url') ||
-                  syncError.includes('timeout') ||
-                  syncError.includes('network') ||
-                  syncError.includes('offline')))
-            "
-            class="sync-icon-status offline"
-            style="color: #64748b"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2.5"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <path
-              d="M22.61 16.95A5 5 0 0 0 18 10h-1.26a8 8 0 0 0-7.05-6M5 5a8 8 0 0 0 4 15h9a5 5 0 0 0 1.7-.3"
-            ></path>
-            <line x1="1" y1="1" x2="23" y2="23"></line>
-          </svg>
-
-          <!-- Estado: Sincronizando (Cargando) -->
-          <svg
-            v-else-if="isCloudLoading"
-            class="sync-icon-status spin"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="#3b82f6"
-            stroke-width="2.5"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <polyline points="23 4 23 10 17 10"></polyline>
-            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
-          </svg>
-          <!-- Estado: Error Crítico de Sincronización (API/Permisos) -->
-          <svg
-            v-else-if="syncError"
-            class="sync-icon-status error"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="#ef4444"
-            stroke-width="2.5"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <circle cx="12" cy="12" r="10"></circle>
-            <line x1="12" y1="8" x2="12" y2="12"></line>
-            <line x1="12" y1="16" x2="12.01" y2="16"></line>
-          </svg>
-
-          <!-- Estado: Pendiente (Dirty) -->
-          <svg
-            v-else-if="isDirty"
-            class="sync-icon-status pending"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="#f59e0b"
-            stroke-width="2.5"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <circle cx="12" cy="12" r="10"></circle>
-            <polyline points="12 6 12 12 16 14"></polyline>
-          </svg>
-
-          <!-- Estado: Éxito (Sincronizado) -->
-          <svg
-            v-else
-            class="sync-icon-status success"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="#10b981"
-            stroke-width="2.5"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
-            <polyline points="22 4 12 14.01 9 11.01"></polyline>
-          </svg>
+        <div class="sync-status">
+          <SyncIcon 
+            :status="syncStatus" 
+            :size="22" 
+            show-tooltip 
+            :tooltip-text="syncTooltip" 
+          />
         </div>
 
         <button
@@ -1788,57 +1670,21 @@ onMounted(async () => {
         "
       >
         <!-- ICONO DINÁMICO SEGÚN EL TEXTO O ESTADO -->
-        <!-- Sincronizando (Flechas azules) -->
-        <svg
-          v-if="
-            modalMensaje.titulo.includes('línea') ||
-            modalMensaje.titulo.includes('nube')
-          "
-          class="sync-icon-status spin"
-          style="color: #2563eb; width: 56px; height: 56px"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"></path>
-          <polyline points="21 3 21 8 16 8"></polyline>
-        </svg>
-
-        <!-- Éxito (Check verde) -->
-        <svg
-          v-else-if="
-            modalMensaje.titulo.includes('éxito') ||
-            modalMensaje.titulo.includes('asegurados')
-          "
-          style="color: #10b981; width: 56px; height: 56px"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
-          <polyline points="22 4 12 14.01 9 11.01"></polyline>
-        </svg>
-
-        <!-- Pendiente (Reloj naranja) -->
-        <svg
+        <SyncIcon
+          v-if="modalMensaje.titulo.includes('línea') || modalMensaje.titulo.includes('nube')"
+          status="loading"
+          :size="56"
+        />
+        <SyncIcon
+          v-else-if="modalMensaje.titulo.includes('éxito') || modalMensaje.titulo.includes('asegurados')"
+          status="success"
+          :size="56"
+        />
+        <SyncIcon
           v-else
-          style="color: #f59e0b; width: 56px; height: 56px"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <circle cx="12" cy="12" r="10"></circle>
-          <polyline points="12 6 12 12 16 14"></polyline>
-        </svg>
+          status="pending"
+          :size="56"
+        />
 
         <p style="font-weight: 500; color: #666; font-size: 1.1em">
           {{ modalMensaje.texto }}
@@ -1865,21 +1711,7 @@ onMounted(async () => {
         v-if="modalConfirmacion.icono === 'offline'"
         style="display: flex; justify-content: center; margin: 15px 0"
       >
-        <svg
-          class="sync-icon-status offline"
-          style="color: #64748b; width: 56px; height: 56px"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <path
-            d="M22.61 16.95A5 5 0 0 0 18 10h-1.26a8 8 0 0 0-7.05-6M5 5a8 8 0 0 0 4 15h9a5 5 0 0 0 1.7-.3"
-          ></path>
-          <line x1="1" y1="1" x2="23" y2="23"></line>
-        </svg>
+        <SyncIcon status="offline" :size="56" />
       </div>
 
       <!-- ICONO DE DRIVE NO VINCULADO (NUEVO) -->
@@ -1887,26 +1719,7 @@ onMounted(async () => {
         v-if="modalConfirmacion.icono === 'not-linked'"
         style="display: flex; justify-content: center; margin: 15px 0"
       >
-        <svg
-          style="width: 64px; height: 64px"
-          viewBox="0 0 24 24"
-          fill="none"
-          xmlns="http://www.w3.org/2000/svg"
-        >
-          <path
-            d="M12.01 1.485c-2.082 0-3.754.02-3.743.047.01.02 1.708 3.001 3.774 6.62l3.76 6.574h3.76c2.081 0 3.753-.02 3.742-.047-.005-.02-1.708-3.001-3.775-6.62l-3.76-6.574zm-4.76 1.73a789.828 789.861 0 0 0-3.63 6.319L0 15.868l1.89 3.298 1.885 3.297 3.62-6.335 3.618-6.33-1.88-3.287C8.1 4.704 7.255 3.22 7.25 3.214zm2.259 12.653-.203.348c-.114.198-.96 1.672-1.88 3.287a423.93 423.948 0 0 1-1.698 2.97c-.01.026 3.24.042 7.222.042h7.244l1.796-3.157c.992-1.734 1.85-3.23 1.906-3.323l.104-.167h-7.249z"
-            fill="#94a3b8"
-          />
-          <line
-            x1="2"
-            y1="2"
-            x2="22"
-            y2="22"
-            stroke="#64748b"
-            stroke-width="2.5"
-            stroke-linecap="round"
-          />
-        </svg>
+        <SyncIcon status="not-linked" :size="64" />
       </div>
 
       <p style="white-space: pre-line">{{ modalConfirmacion.texto }}</p>
