@@ -332,6 +332,8 @@ export function useDrive() {
 
   // --- NUEVA LÓGICA DE CARPETAS ---
   const currentMonthFolderId = ref<string | null>(null);
+  const securityKeysFolderId = ref<string | null>(null);
+
 
   const getOrCreateFolder = async (name: string, parentId?: string) => {
     try {
@@ -413,7 +415,22 @@ export function useDrive() {
     }
   };
 
+  const ensureSecurityKeysFolder = async () => {
+    if (securityKeysFolderId.value) return securityKeysFolderId.value;
+    try {
+      const rootId = await getOrCreateFolder("SistemaGestionPollos_Backups");
+      if (!rootId) return null;
+      const folderId = await getOrCreateFolder("LLAVES DE SEGURIDAD", rootId);
+      securityKeysFolderId.value = folderId;
+      return folderId;
+    } catch (e) {
+      console.error("Error asegurando carpeta de llaves:", e);
+      return null;
+    }
+  };
+
   const findTodayBackup = async (datePrefix: string, parentId?: string) => {
+
     try {
       // Buscamos cualquier archivo que EMPIECE con el prefijo de hoy
       let query = `name contains '${datePrefix}' and trashed = false`;
@@ -571,11 +588,15 @@ export function useDrive() {
 
   // ... (restoreBackup logic) ...
 
-  const uploadFile = async (file: File) => {
+  const uploadFile = async (file: File, folderType: "backup" | "security" = "backup") => {
+
     if (!accessToken.value) return;
     try {
       loading.value = true;
-      const folderId = await ensureFolderHierarchy();
+      const folderId = folderType === "security"
+        ? await ensureSecurityKeysFolder()
+        : await ensureFolderHierarchy();
+
 
       const metadata: any = {
         name: file.name,

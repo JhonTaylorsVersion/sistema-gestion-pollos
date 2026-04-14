@@ -547,7 +547,7 @@ const subirCodigosADrive = async (contentArray: Uint8Array) => {
       type: "application/octet-stream",
     });
 
-    await uploadFileDrive(file);
+    await uploadFileDrive(file, "security");
 
     mostrarToast("Copia cifrada guardada en Google Drive con éxito.");
   } catch (e) {
