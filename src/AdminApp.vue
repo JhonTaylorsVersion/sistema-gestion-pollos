@@ -7,7 +7,13 @@ import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import JSZip from "jszip";
 import { save, ask, open } from "@tauri-apps/plugin-dialog";
-import { writeFile, readFile, remove, rename, exists } from "@tauri-apps/plugin-fs";
+import {
+  writeFile,
+  readFile,
+  remove,
+  rename,
+  exists,
+} from "@tauri-apps/plugin-fs";
 
 import { revealItemInDir, openUrl } from "@tauri-apps/plugin-opener";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -184,14 +190,27 @@ const cargandoGalpones = ref(false);
 const cargandoConjuntos = ref(false);
 
 let db: Database | null = null;
+let dbPromise: Promise<Database> | null = null;
 
-const initDB = async () => {
+const initDB = async (): Promise<Database> => {
   if (db) return db;
-  db = await Database.load("sqlite:pollos.db");
-  await db.execute(
-    `CREATE TABLE IF NOT EXISTS app_config (key TEXT PRIMARY KEY, value TEXT)`,
-  );
-  return db;
+  if (dbPromise) return dbPromise;
+
+  dbPromise = (async () => {
+    try {
+      const connection = await Database.load("sqlite:pollos.db");
+      await connection.execute(
+        `CREATE TABLE IF NOT EXISTS app_config (key TEXT PRIMARY KEY, value TEXT)`,
+      );
+      db = connection;
+      return db;
+    } catch (e) {
+      dbPromise = null; // Resetear para permitir reintento si falla
+      throw e;
+    }
+  })();
+
+  return dbPromise;
 };
 
 // --- Estados de Seguridad 2FA ---
@@ -215,7 +234,7 @@ const llaveValidada = ref(false);
 watch(input2FACode, (newVal) => {
   // Limpiamos espacios por si acaso
   const code = newVal.trim();
-  
+
   // Si tiene exactamente 6 caracteres y NO estamos en modo soporte/llave
   // (El modo soporte usa códigos más largos o recovery codes de 8 chars)
   if (code.length === 6 && !showSupportMode.value && !llaveValidada.value) {
@@ -244,6 +263,7 @@ const showDeleteOldKeyConfirm = ref(false);
 const databaseMalformed = ref(false);
 const showRecoverySuccessModal = ref(false);
 const recoveryType = ref<"local" | "clean">("clean");
+const isConfigLoaded = ref(false);
 
 const cerrarRecoverySuccessModal = () => {
   showRecoverySuccessModal.value = false;
@@ -279,11 +299,15 @@ const repararBaseDeDatos = async () => {
       // 2. Intentar Recuperación Local (Plan A)
       const hasBak = await exists(bakPath);
       if (hasBak) {
-        console.log("📦 [Rescate] Encontrado respaldo local .bak. Restaurando...");
+        console.log(
+          "📦 [Rescate] Encontrado respaldo local .bak. Restaurando...",
+        );
         await rename(bakPath, dbPath);
         localStorage.setItem("db_recovery_flag", "local");
       } else {
-        console.log("📦 [Rescate] No hay respaldo local. Iniciando sistema limpio.");
+        console.log(
+          "📦 [Rescate] No hay respaldo local. Iniciando sistema limpio.",
+        );
         localStorage.setItem("db_recovery_flag", "clean");
       }
 
@@ -324,8 +348,6 @@ const modalSeguridadTitulo = computed(() => {
   return "Verificación de Seguridad";
 });
 
-
-
 const modalSeguridadMensaje = computed(() => {
   if (verifyTargetFileId.value === "RESET_2FA_ACTION")
     return "Para vincular un nuevo celular, ingresa el código actual de tu Authenticator o un código de recuperación.";
@@ -358,15 +380,33 @@ const cargarConfig2FA = async () => {
       const codesRaw = res.find((r) => r.key === "2fa_recovery_codes")?.value;
       const confirmed = res.find((r) => r.key === "2fa_confirmed")?.value;
 
+      console.log("🔑 [Config2FA] Datos cargados de BD:", {
+        tieneSecret: !!secret,
+        tieneCodes: !!codesRaw,
+        confirmedValue: confirmed,
+      });
+
       if (secret) twoFactorSecret.value = secret;
       if (codesRaw) recoveryCodes.value = JSON.parse(codesRaw);
-      if (confirmed === "true") is2FAConfirmed.value = true;
+
+      if (confirmed === "true") {
+        is2FAConfirmed.value = true;
+        console.log("✅ [Config2FA] 2FA confirmado localmente.");
+      } else {
+        is2FAConfirmed.value = false;
+        console.log("⚠️ [Config2FA] 2FA NO confirmado localmente.");
+      }
 
       // SI HAY SECRETO PERO NO ESTÁ CONFIRMADO (Cajón de seguridad anti-apagones)
       if (twoFactorSecret.value && !is2FAConfirmed.value) {
         haDescargadoCodigos.value = false;
+        console.log(
+          "🚨 [Config2FA] Detectado estado pendiente de confirmación.",
+        );
         showRecoveryModal.value = true;
       }
+    } else {
+      console.log("ℹ️ [Config2FA] No hay configuración previa en BD.");
     }
 
     // 3. Garantizar que siempre haya un System ID
@@ -379,6 +419,7 @@ const cargarConfig2FA = async () => {
       );
     }
     systemId.value = sid;
+    isConfigLoaded.value = true; // 🏁 Marcamos como cargado
   } catch (e) {
     console.error("Error al cargar config 2FA:", e);
     if (String(e).includes("malformed")) databaseMalformed.value = true;
@@ -536,8 +577,6 @@ const confirmar2FASetup = async () => {
   }
 };
 
-
-
 const finalizarConfiguracion2FA = async () => {
   const db = await initDB();
   await db.execute(
@@ -582,9 +621,13 @@ const finalizarConfiguracion2FA = async () => {
     });
 
     if (saved) {
-      console.log("🔒 Identidad Cloud sincronizada con Hashes de Recuperación.");
+      console.log(
+        "🔒 Identidad Cloud sincronizada con Hashes de Recuperación.",
+      );
     } else {
-      console.warn("⚠️ La identidad Cloud no se pudo sincronizar, pero el 2FA local está activo.");
+      console.warn(
+        "⚠️ La identidad Cloud no se pudo sincronizar, pero el 2FA local está activo.",
+      );
     }
   } catch (e) {
     console.error("Error al sincronizar identidad en la nube:", e);
@@ -2073,22 +2116,34 @@ const {
 
 // --- GUARDIA DE INTEGRIDAD (NIST-Compliant) ---
 const requiereSeguridadUrgente = computed(() => {
-  // CASO 1: Identidad oficial confirmada en Drive (AppDataFolder)
+  // 🛡️ NO HACER NADA SI LA CONFIGURACIÓN NO HA CARGADO TODAVÍA
+  if (!isConfigLoaded.value) return false;
+
   const cloudConfirmed = !!cloudAccountState.value?.twoFactor?.confirmed;
+  const legacyMigrationNeeded =
+    !cloudAccountState.value && backupsDrive.value.length > 0;
+  const isConfirmedLocal = is2FAConfirmed.value;
 
-  // CASO 2: Identidad heredada (Backups detectados pero sin manifiesto oficial y sin 2FA local)
-  // Si encontramos backups, asumimos que este usuario "ya existe" y debe protegerse.
-  const legacyMigrationNeeded = !cloudAccountState.value && backupsDrive.value.length > 0;
+  const result = (cloudConfirmed || legacyMigrationNeeded) && !isConfirmedLocal;
 
-  return (cloudConfirmed || legacyMigrationNeeded) && !is2FAConfirmed.value;
+  if (result) {
+    console.log("🛡️ [Guardia] REQUIERE SEGURIDAD DETECTADO:", {
+      cloudConfirmed,
+      legacyMigrationNeeded,
+      isConfirmedLocal,
+      cloudAccountState: cloudAccountState.value,
+    });
+  }
+
+  return result;
 });
 
 // Auto-redirigir a la solución si hay inconsistencia
 watch(
-  requiereSeguridadUrgente,
-  (newVal) => {
-    if (newVal) {
-      seccionActiva.value = "sincronizacion";
+  [requiereSeguridadUrgente, seccionActiva],
+  ([urgent, section]) => {
+    // 🛡️ Solo actuar si se requiere seguridad Y estamos en la pestaña de sincronización
+    if (urgent && section === "sincronizacion") {
       subSeccionSync.value = "seguridad";
 
       // 🛡️ DECISIÓN INTELIGENTE: ¿Es configuración nueva o recuperación?
@@ -2096,16 +2151,25 @@ watch(
 
       if (!show2FAVerifyModal.value && !show2FASetupModal.value) {
         if (isRecovery) {
-          console.log("🔍 [Guardia] Detectada identidad en nube. Iniciando Verificación de Identidad.");
+          console.log(
+            "🔍 [Guardia] Detectada identidad en nube. Iniciando Verificación de Identidad.",
+          );
           verifyTargetFileId.value = "LOGIN_IDENTITY_UNLOCK";
           input2FACode.value = "";
           llaveValidada.value = false;
           show2FAVerifyModal.value = true;
         } else {
-          console.log("🔍 [Guardia] Usuario nuevo. Iniciando Configuración 2FA.");
+          console.log(
+            "🔍 [Guardia] Usuario nuevo detectado en Sincronización. Iniciando Configuración 2FA.",
+          );
           iniciar2FASetup();
         }
       }
+    } else {
+      // 🛡️ Si salimos de la sección, cerramos los modales de seguridad para liberar la vista
+      show2FAVerifyModal.value = false;
+      show2FASetupModal.value = false;
+      showRecoveryModal.value = false;
     }
   },
   { immediate: true },
@@ -2164,7 +2228,9 @@ const iniciarLoginConSeguridad = async () => {
       if (state?.twoFactor?.confirmed && !is2FAConfirmed.value) {
         // Dejamos que el watcher (Guardia de Integridad) maneje la apertura del modal
         // al detectar el cambio en cloudAccountState para evitar duplicidad.
-        console.log("ℹ️ [Login] Identidad en nube detectada. El Guardia manejará el modal.");
+        console.log(
+          "ℹ️ [Login] Identidad en nube detectada. El Guardia manejará el modal.",
+        );
       } else {
         // 2. Si no hay estado oficial, revisamos backups (Modo Migración Legado)
         await listBackupsDrive();
@@ -2176,6 +2242,9 @@ const iniciarLoginConSeguridad = async () => {
           // CASO A: Usuario Nuevo Real
           // Dejamos que el watcher maneje la apertura si corresponde.
           console.log("ℹ️ [Login] Usuario nuevo detectado.");
+          mostrarToast(
+            "Conexión exitosa. Por seguridad, configura tu Authenticator.",
+          );
         }
       }
     }
@@ -2237,11 +2306,15 @@ const procesarEliminacionCon2FA = async () => {
 
     // SI NO ES VÁLIDO TOTP, intentamos como CÓDIGO DE RECUPERACIÓN (Local o Cloud)
     if (!isValid) {
-      if (verifyTargetFileId.value === "LOGIN_IDENTITY_UNLOCK" && cloudAccountState.value) {
+      if (
+        verifyTargetFileId.value === "LOGIN_IDENTITY_UNLOCK" &&
+        cloudAccountState.value
+      ) {
         // --- VALIDACIÓN CONTRA LA NUBE (REINSTALACIÓN) ---
         const codeToVerify = input2FACode.value || "";
         const inputHash = await hashStringDrive(codeToVerify);
-        const hashes = cloudAccountState.value.recovery?.recoveryCodeHashes || [];
+        const hashes =
+          cloudAccountState.value.recovery?.recoveryCodeHashes || [];
         const index = hashes.indexOf(inputHash);
 
         if (index !== -1) {
@@ -2252,19 +2325,28 @@ const procesarEliminacionCon2FA = async () => {
             newState.recovery.recoveryCodeHashes.splice(index, 1);
             newState.recovery.failedAttempts = 0; // Reset intentos fallidos
             await saveAccountState(newState);
-            console.log("✅ Identidad desbloqueada y código de un solo uso consumido.");
+            console.log(
+              "✅ Identidad desbloqueada y código de un solo uso consumido.",
+            );
           }
         } else {
           // Incrementar intentos fallidos en la nube (Rate Limiting)
           const newState = JSON.parse(JSON.stringify(cloudAccountState.value));
           if (newState.recovery) {
-            newState.recovery.failedAttempts = (newState.recovery.failedAttempts || 0) + 1;
+            newState.recovery.failedAttempts =
+              (newState.recovery.failedAttempts || 0) + 1;
             await saveAccountState(newState);
-            
+
             if (newState.recovery.failedAttempts >= 5) {
-              mostrarToast("Demasiados intentos fallidos. Contacta a soporte.", "error");
+              mostrarToast(
+                "Demasiados intentos fallidos. Contacta a soporte.",
+                "error",
+              );
             } else {
-              mostrarToast(`Código incorrecto. Intento ${newState.recovery.failedAttempts}/5`, "error");
+              mostrarToast(
+                `Código incorrecto. Intento ${newState.recovery.failedAttempts}/5`,
+                "error",
+              );
             }
           }
         }
@@ -2323,11 +2405,13 @@ const procesarEliminacionCon2FA = async () => {
         mostrarToast("¡Identidad validada!", "success");
         show2FAVerifyModal.value = false;
         verifyTargetFileId.value = null;
-        
+
         // Si después de validar identidad detectamos que no hay 2FA local (reset o reinstalación)
         // forzamos la configuración inmediata
         if (requiereSeguridadUrgente.value) {
-          console.log("🛡️ Identidad recuperada, pero falta 2FA local. Forzando configuración.");
+          console.log(
+            "🛡️ Identidad recuperada, pero falta 2FA local. Forzando configuración.",
+          );
           iniciar2FASetup();
         } else {
           seccionActiva.value = "sincronizacion";
@@ -2381,7 +2465,12 @@ const procesarEliminacionCon2FA = async () => {
 
       // CASO: ELIMINACIÓN DE BACKUP
       const fileId = verifyTargetFileId.value || "";
-      if (!fileId || fileId === "LOGIN_IDENTITY_UNLOCK" || fileId === "SIGNOUT_DRIVE_ACTION" || fileId === "RESET_2FA_ACTION") {
+      if (
+        !fileId ||
+        fileId === "LOGIN_IDENTITY_UNLOCK" ||
+        fileId === "SIGNOUT_DRIVE_ACTION" ||
+        fileId === "RESET_2FA_ACTION"
+      ) {
         return;
       }
 
@@ -2520,19 +2609,6 @@ const reabrirMain = async () => {
     </div>
 
     <div v-else class="dashboard-page">
-      <!-- --- BANNER DE ALERTA DE SEGURIDAD (INTEGRIDAD) --- -->
-      <div v-if="requiereSeguridadUrgente" class="security-integrity-banner animate-fade-in">
-        <div class="integrity-icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
-            <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-          </svg>
-        </div>
-        <div class="integrity-text">
-          <strong>Acceso restringido:</strong> Tu cuenta requiere protección 2FA. Por favor, <strong>restaura tu backup</strong> para recuperar tu clave anterior o <strong>configura una nueva</strong> en el panel de seguridad.
-        </div>
-      </div>
-
       <aside class="sidebar">
         <h2>Panel de Control</h2>
 
@@ -2570,11 +2646,15 @@ const reabrirMain = async () => {
 
         <div class="sidebar-divider"></div>
 
-        <button 
-          class="sidebar-btn-back" 
+        <button
+          class="sidebar-btn-back"
           @click="reabrirMain"
           :disabled="requiereSeguridadUrgente"
-          :title="requiereSeguridadUrgente ? 'Debes configurar o restaurar tu seguridad 2FA primero' : ''"
+          :title="
+            requiereSeguridadUrgente
+              ? 'Debes configurar o restaurar tu seguridad 2FA primero'
+              : ''
+          "
         >
           <svg
             viewBox="0 0 24 24"
@@ -2585,13 +2665,45 @@ const reabrirMain = async () => {
           >
             <polyline points="15 18 9 12 15 6" />
           </svg>
-          {{ requiereSeguridadUrgente ? 'Seguridad Requerida' : 'Volver al Sistema' }}
+          {{
+            requiereSeguridadUrgente
+              ? "Seguridad Requerida"
+              : "Volver al Sistema"
+          }}
         </button>
 
         <button class="sidebar-btn" @click="cerrarSesion">Cerrar sesión</button>
       </aside>
 
       <main class="dashboard-content">
+        <!-- --- BANNER DE ALERTA DE SEGURIDAD (INTEGRIDAD) --- -->
+        <div
+          v-if="requiereSeguridadUrgente"
+          class="security-integrity-banner animate-fade-in"
+        >
+          <div class="integrity-icon">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+              <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+            </svg>
+          </div>
+          <div class="integrity-text">
+            <strong>Seguridad:</strong> Tu cuenta requiere protección 2FA. Por
+            favor, <strong>configura una nueva</strong> en el
+            <strong
+              class="integrity-link"
+              @click="cambiarSeccion('sincronizacion')"
+              >Panel de Sincronización</strong
+            >.
+          </div>
+        </div>
         <template
           v-if="seccionActiva === 'busqueda' || seccionActiva === 'detalle'"
         >
@@ -3430,10 +3542,18 @@ const reabrirMain = async () => {
                   Error Crítico de Archivo Detectado
                 </h3>
               </div>
-              <p style="color: #7f1d1d; margin: 0; line-height: 1.5; font-size: 14.5px">
-                Se ha detectado que el archivo local de datos está dañado
-                (<b>malformed disk image</b>). Esto impide cargar tus registros y configuración
-                de seguridad local.
+              <p
+                style="
+                  color: #7f1d1d;
+                  margin: 0;
+                  line-height: 1.5;
+                  font-size: 14.5px;
+                "
+              >
+                Se ha detectado que el archivo local de datos está dañado (<b
+                  >malformed disk image</b
+                >). Esto impide cargar tus registros y configuración de
+                seguridad local.
               </p>
               <button
                 class="btn-danger"
@@ -3498,7 +3618,11 @@ const reabrirMain = async () => {
                 <a
                   href="#"
                   @click.prevent="resetLoadingDrive"
-                  style="color: #3b82f6; font-weight: 700; text-decoration: underline"
+                  style="
+                    color: #3b82f6;
+                    font-weight: 700;
+                    text-decoration: underline;
+                  "
                 >
                   Click aquí para cancelar
                 </a>
@@ -3979,7 +4103,14 @@ const reabrirMain = async () => {
     <div class="modal-box recovery-codes-box">
       <div class="security-header success">
         <div class="security-icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="3"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
             <polyline points="20 6 9 17 4 12" />
           </svg>
         </div>
@@ -4002,7 +4133,9 @@ const reabrirMain = async () => {
             stroke-linecap="round"
             stroke-linejoin="round"
           >
-            <path d="M15 6a5 5 0 1 0-5 5v3l-1 1v2l1 1h2l1-1v-2l1-1v-3a5 5 0 0 0 4-5z" />
+            <path
+              d="M15 6a5 5 0 1 0-5 5v3l-1 1v2l1 1h2l1-1v-2l1-1v-3a5 5 0 0 0 4-5z"
+            />
             <circle cx="15" cy="6" r="1" />
           </svg>
         </div>
@@ -4247,7 +4380,11 @@ const reabrirMain = async () => {
           Cancelar
         </button>
         <button
-          :class="verifyTargetFileId !== 'LOGIN_IDENTITY_UNLOCK' ? 'btn-danger' : 'btn-primary'"
+          :class="
+            verifyTargetFileId !== 'LOGIN_IDENTITY_UNLOCK'
+              ? 'btn-danger'
+              : 'btn-primary'
+          "
           @click="procesarEliminacionCon2FA"
           :disabled="verificando2FA || input2FACode.length < 6"
         >
@@ -4399,7 +4536,6 @@ const reabrirMain = async () => {
     </div>
   </div>
 
-
   <div v-if="modalConfirmacion.visible" class="modal-overlay">
     <div class="modal-box">
       <h3>{{ modalConfirmacion.titulo }}</h3>
@@ -4505,7 +4641,13 @@ const reabrirMain = async () => {
               <line x1="12" y1="16" x2="12.01" y2="16"></line>
             </svg>
           </div>
-          <h3>{{ recoveryType === 'local' ? 'Reparación Exitosa' : 'Sistema Aislado' }}</h3>
+          <h3>
+            {{
+              recoveryType === "local"
+                ? "Reparación Exitosa"
+                : "Sistema Aislado"
+            }}
+          </h3>
         </div>
 
         <div class="modal-body">
@@ -4525,10 +4667,15 @@ const reabrirMain = async () => {
               "
             >
               <p
-                style="margin: 0; color: #166534; font-size: 14px; line-height: 1.5"
+                style="
+                  margin: 0;
+                  color: #166534;
+                  font-size: 14px;
+                  line-height: 1.5;
+                "
               >
-                Tus datos están intactos y al día. Puedes continuar trabajando de
-                inmediato.
+                Tus datos están intactos y al día. Puedes continuar trabajando
+                de inmediato.
               </p>
             </div>
           </div>
@@ -4548,7 +4695,12 @@ const reabrirMain = async () => {
               "
             >
               <p
-                style="margin: 0; color: #92400e; font-size: 14px; line-height: 1.5"
+                style="
+                  margin: 0;
+                  color: #92400e;
+                  font-size: 14px;
+                  line-height: 1.5;
+                "
               >
                 <b>Siguiente paso:</b> La aplicación se ha iniciado en blanco.
                 Ve a Sincronización para restaurar tu última copia de la nube.
@@ -4563,7 +4715,11 @@ const reabrirMain = async () => {
             style="width: 100%; height: 50px; font-size: 16px"
             @click="cerrarRecoverySuccessModal"
           >
-            {{ recoveryType === 'local' ? 'Excelente, Continuar' : 'Ir a Sincronización Ahora' }}
+            {{
+              recoveryType === "local"
+                ? "Excelente, Continuar"
+                : "Ir a Sincronización Ahora"
+            }}
           </button>
         </div>
       </div>
@@ -4680,6 +4836,8 @@ const reabrirMain = async () => {
   flex-direction: column;
   gap: 12px;
   overflow-y: auto;
+  position: relative;
+  z-index: 10000; /* Por encima del modal-overlay (9999) */
 }
 
 .sidebar h2 {
@@ -5712,20 +5870,18 @@ const reabrirMain = async () => {
 
 /* BANNER INTEGRIDAD */
 .security-integrity-banner {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
+  flex-shrink: 0;
   background: #991b1b;
   color: white;
-  padding: 10px 20px;
+  padding: 12px 24px;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 15px;
   z-index: 1000;
   font-size: 13px;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  margin-bottom: 5px;
 }
 
 .integrity-icon {
@@ -5739,6 +5895,17 @@ const reabrirMain = async () => {
   color: #ef4444;
   box-shadow: 0 4px 12px rgba(239, 68, 68, 0.15);
   flex-shrink: 0;
+}
+
+.integrity-link {
+  text-decoration: underline;
+  cursor: pointer;
+  color: #ffffff;
+  transition: color 0.2s;
+}
+
+.integrity-link:hover {
+  color: #fca5a5;
 }
 
 .integrity-icon svg {
@@ -6397,7 +6564,9 @@ const reabrirMain = async () => {
   gap: 25px;
   margin: 25px 0;
   border: 1px solid #eef2f7;
-  box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.03), inset 0 2px 4px rgba(255, 255, 255, 0.8);
+  box-shadow:
+    0 10px 30px -5px rgba(0, 0, 0, 0.03),
+    inset 0 2px 4px rgba(255, 255, 255, 0.8);
   position: relative;
   overflow: hidden;
 }

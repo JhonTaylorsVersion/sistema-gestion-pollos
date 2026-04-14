@@ -26,9 +26,13 @@ const REDIRECT_URI = "http://127.0.0.1:14210";
 const SCOPES =
   "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.appdata https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email";
 
-const user = ref<GoogleUser | null>(null);
+const user = ref<GoogleUser | null>(
+  JSON.parse(localStorage.getItem("google_user_cache") || "null"),
+);
 const loading = ref(false);
-const backups = ref<DriveFile[]>([]);
+const backups = ref<DriveFile[]>(
+  JSON.parse(localStorage.getItem("google_backups_cache") || "[]"),
+);
 const accessToken = ref<string | null>(
   localStorage.getItem("google_access_token"),
 );
@@ -92,7 +96,6 @@ if (typeof window !== "undefined") {
 
   // Polling de seguridad cada 1.5 segundos por seguridad crítica en backups/restores
   setInterval(checkStatus, 1500);
-
 
   // Un check inicial al cargar
   setTimeout(checkStatus, 1000);
@@ -200,9 +203,9 @@ export function useDrive() {
     } catch (error) {
       console.error("Login Error:", error);
       const isTimeout = (error as Error).message === "TIEMPO_EXCEDIDO";
-      
+
       mostrarToast(
-        isTimeout 
+        isTimeout
           ? "El tiempo de espera para iniciar sesión ha expirado. Por favor, intenta de nuevo."
           : "Error al iniciar sesión con Google. Por favor, verifica tu conexión o intenta de nuevo.",
         isTimeout ? "info" : "error",
@@ -287,6 +290,7 @@ export function useDrive() {
   };
 
   const fetchUserInfo = async () => {
+    if (!isOnline.value) return;
     try {
       const response = await fetchWithAuth(
         "https://www.googleapis.com/oauth2/v3/userinfo",
@@ -300,6 +304,7 @@ export function useDrive() {
         picture: data.picture || "",
       };
 
+      localStorage.setItem("google_user_cache", JSON.stringify(user.value));
       console.log("Perfil Procesado:", user.value);
     } catch (error) {
       console.error("User Info Error:", error);
@@ -307,6 +312,7 @@ export function useDrive() {
   };
 
   const listBackups = async (silent = false) => {
+    if (!isOnline.value) return;
     try {
       if (!silent) loading.value = true;
       // IMPORTANTE: Codificamos el query para evitar errores de interpretación (espacios -> %20)
@@ -316,6 +322,7 @@ export function useDrive() {
       );
       const data = (await response.json()) as any;
       backups.value = data.files || [];
+      localStorage.setItem("google_backups_cache", JSON.stringify(backups.value));
 
       // Si el archivo que teníamos en caché para hoy no aparece en la lista fresca, lo olvidamos
       const dateStr = new Date().toISOString().slice(0, 10);
@@ -334,7 +341,6 @@ export function useDrive() {
   // --- NUEVA LÓGICA DE CARPETAS ---
   const currentMonthFolderId = ref<string | null>(null);
   const securityKeysFolderId = ref<string | null>(null);
-
 
   const getOrCreateFolder = async (name: string, parentId?: string) => {
     try {
@@ -431,7 +437,6 @@ export function useDrive() {
   };
 
   const findTodayBackup = async (datePrefix: string, parentId?: string) => {
-
     try {
       // Buscamos cualquier archivo que EMPIECE con el prefijo de hoy
       let query = `name contains '${datePrefix}' and trashed = false`;
@@ -483,7 +488,9 @@ export function useDrive() {
       }
 
       // 🛡️ VALLA DE SEGURIDAD: Control de Integridad antes de subir
-      console.log("🔍 [Drive] Validando integridad de la base de datos antes de subir...");
+      console.log(
+        "🔍 [Drive] Validando integridad de la base de datos antes de subir...",
+      );
       try {
         const { default: Database } = await import("@tauri-apps/plugin-sql");
         const dbIntegrity = await Database.load("sqlite:pollos.db");
@@ -496,7 +503,9 @@ export function useDrive() {
             "La base de datos local está dañada. Subida cancelada para proteger el respaldo de la nube.",
           );
         }
-        console.log("✅ [Drive] Integridad verificada. Procediendo con el backup.");
+        console.log(
+          "✅ [Drive] Integridad verificada. Procediendo con el backup.",
+        );
       } catch (err: any) {
         if (err.message?.includes("malformed")) {
           isDatabaseCorrupted.value = true;
@@ -611,15 +620,17 @@ export function useDrive() {
 
   // ... (restoreBackup logic) ...
 
-  const uploadFile = async (file: File, folderType: "backup" | "security" = "backup") => {
-
+  const uploadFile = async (
+    file: File,
+    folderType: "backup" | "security" = "backup",
+  ) => {
     if (!accessToken.value) return;
     try {
       loading.value = true;
-      const folderId = folderType === "security"
-        ? await ensureSecurityKeysFolder()
-        : await ensureFolderHierarchy();
-
+      const folderId =
+        folderType === "security"
+          ? await ensureSecurityKeysFolder()
+          : await ensureFolderHierarchy();
 
       const metadata: any = {
         name: file.name,
@@ -850,7 +861,7 @@ export function useDrive() {
         const errorText = await response.text();
         console.error("❌ Error de Google Drive al guardar estado:", {
           status: response.status,
-          body: errorText
+          body: errorText,
         });
         throw new Error(`Drive Error ${response.status}: ${errorText}`);
       }

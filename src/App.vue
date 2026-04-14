@@ -1874,7 +1874,7 @@ onMounted(async () => {
               @change="toggleTodosGalpones"
               :checked="todosGalponesSeleccionados"
             />
-            <strong>Seleccionar Todos</strong>
+            <strong>Todo el Lote</strong>
           </label>
           <hr style="border: 0; border-top: 1px solid #ddd; margin: 10px 0" />
           <label
