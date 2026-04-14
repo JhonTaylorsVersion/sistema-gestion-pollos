@@ -11,6 +11,14 @@ const handleConfigClick = async () => {
   const existing = await WebviewWindow.getByLabel("panel-config");
 
   if (existing) {
+    // Si ya está abierta, la restauramos (por si está minimizada)
+    await existing.unminimize();
+    // La mostramos (por si estaba oculta)
+    await existing.show();
+    // Técnica de enfoque forzado para traerla al frente de todo
+    await existing.setAlwaysOnTop(true);
+    await existing.setAlwaysOnTop(false);
+    // Finalmente le damos el foco
     await existing.setFocus();
     return;
   }
