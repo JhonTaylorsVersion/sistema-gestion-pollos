@@ -1022,19 +1022,6 @@ const conjuntosFiltrados = computed(() => {
 // ==========================================
 // --- MODALES REUTILIZABLES DE MENSAJE Y CONFIRMACIÓN ---
 // ==========================================
-const modalMensaje = ref({
-  visible: false,
-  titulo: "",
-  texto: "",
-});
-
-const mostrarMensaje = (titulo: string, texto: string) => {
-  modalMensaje.value = { visible: true, titulo, texto };
-};
-
-const cerrarMensaje = () => {
-  modalMensaje.value.visible = false;
-};
 
 const modalConfirmacion = ref({
   visible: false,
@@ -2108,7 +2095,7 @@ const iniciarLoginConSeguridad = async () => {
 
 const eliminandoBackup = ref(false);
 
-const confirmarEliminarBackup = async (fileId: string, fileName: string) => {
+const confirmarEliminarBackup = async (fileId: string, _fileName: string) => {
   if (!is2FAEnabled.value) {
     const setup = await ask(
       "Para eliminar copias de seguridad, primero debes activar la seguridad de Google Authenticator. ¿Deseas configurarlo ahora?",
@@ -4193,15 +4180,7 @@ const reabrirMain = async () => {
       </div>
     </div>
   </div>
-  <div v-if="modalMensaje.visible" class="modal-overlay">
-    <div class="modal-box">
-      <h3>{{ modalMensaje.titulo }}</h3>
-      <p>{{ modalMensaje.texto }}</p>
-      <div class="modal-actions">
-        <button class="btn-primary" @click="cerrarMensaje">Aceptar</button>
-      </div>
-    </div>
-  </div>
+
 
   <div v-if="modalConfirmacion.visible" class="modal-overlay">
     <div class="modal-box">
