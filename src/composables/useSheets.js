@@ -87,13 +87,15 @@ export function useSheets() {
     visible: false,
     titulo: "",
     texto: "",
+    cargando: false,
   });
 
-  const mostrarMensaje = (titulo, texto) => {
+  const mostrarMensaje = (titulo, texto, cargando = false) => {
     modalMensaje.value = {
       visible: true,
       titulo,
       texto,
+      cargando,
     };
   };
 
@@ -110,6 +112,7 @@ export function useSheets() {
     textoCancelar: "Cancelar",
     tipo: "normal",
     mostrarEstadoGuardado: false,
+    icono: null,
   });
 
 
@@ -121,6 +124,7 @@ export function useSheets() {
     textoCancelar = "Cancelar",
     tipo = "normal",
     mostrarEstadoGuardado = false,
+    icono = null,
   ) => {
     modalConfirmacion.value = {
       visible: true,
@@ -131,6 +135,7 @@ export function useSheets() {
       textoCancelar,
       tipo,
       mostrarEstadoGuardado,
+      icono,
     };
   };
 
@@ -152,6 +157,7 @@ export function useSheets() {
       textoCancelar: "Cancelar",
       tipo: "normal",
       mostrarEstadoGuardado: false,
+      icono: null,
     };
   };
 
@@ -238,29 +244,14 @@ export function useSheets() {
 
   const crearIdLote = (numero = 1) => {
     const fecha = new Date();
-
     const year = fecha.getFullYear();
-
-    const meses = [
-      "ENE",
-      "FEB",
-      "MAR",
-      "ABR",
-      "MAY",
-      "JUN",
-      "JUL",
-      "AGO",
-      "SEP",
-      "OCT",
-      "NOV",
-      "DIC",
-    ];
-
+    const meses = ["ENE", "FEB", "MAR", "ABR", "MAY", "JUN", "JUL", "AGO", "SEP", "OCT", "NOV", "DIC"];
     const mes = meses[fecha.getMonth()];
-
     const numeroFormateado = String(numero).padStart(2, "0");
+    const uniquePart = Date.now().toString().slice(-4);
 
-    return `LOTE${numeroFormateado}:${mes}-${year}`;
+    // Formato: LOTE01-1234:ABR-2026 (Mantenemos el formato para que el auto-rescate siga funcionando)
+    return `LOTE${numeroFormateado}-${uniquePart}:${mes}-${year}`;
   };
 
   const conjunto = ref({
@@ -271,29 +262,14 @@ export function useSheets() {
 
   const crearId = (numero) => {
     const fecha = new Date();
-
     const year = fecha.getFullYear();
-
-    const meses = [
-      "ENE",
-      "FEB",
-      "MAR",
-      "ABR",
-      "MAY",
-      "JUN",
-      "JUL",
-      "AGO",
-      "SEP",
-      "OCT",
-      "NOV",
-      "DIC",
-    ];
-
+    const meses = ["ENE", "FEB", "MAR", "ABR", "MAY", "JUN", "JUL", "AGO", "SEP", "OCT", "NOV", "DIC"];
     const mes = meses[fecha.getMonth()];
-
     const numeroFormateado = String(numero).padStart(2, "0");
+    const uniquePart = Date.now().toString().slice(-4);
 
-    return `GAL${numeroFormateado}:${mes}-${year}`;
+    // Formato: GAL01-5678:ABR-2026
+    return `GAL${numeroFormateado}-${uniquePart}:${mes}-${year}`;
   };
 
   const crearFilasVacias = () =>
@@ -2782,9 +2758,7 @@ export function useSheets() {
       isInternalAction.value = true; // 🔇 ACTIVAR SILENCIADOR
       const database = await initDB();
 
-      recalcularSheet(currentSheet.value);
-      const sheet = currentSheet.value;
-
+      // 1. Guardar/Actualizar el Conjunto (Lote)
       await database.execute(
         `INSERT OR REPLACE INTO conjuntos (id, nombre, descripcion) VALUES (?, ?, ?)`,
         [
@@ -2794,53 +2768,75 @@ export function useSheets() {
         ],
       );
 
-      await database.execute(
-        `INSERT OR REPLACE INTO sheets
-        (id, conjunto_id, nombre, granja, lote, galpon, fecha_ingreso, procedencia, cantidad)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          sheet.id,
-          conjunto.value.id,
-          sheet.nombre,
-          sheet.form.granja || "",
-          sheet.form.lote || "",
-          sheet.form.galpon || "",
-          sheet.form.fechaIngreso || "",
-          sheet.form.procedencia || "",
-          Number(sheet.form.cantidad) || 0,
-        ],
-      );
-
-      await database.execute(`DELETE FROM filas WHERE sheet_id = ?`, [
-        sheet.id,
-      ]);
-
-      for (const fila of sheet.filas) {
+      // 2. Guardar TODOS los galpones actuales uno por uno
+      for (const s of sheets.value) {
+        recalcularSheet(s);
+        
         await database.execute(
-          `INSERT INTO filas
-          (sheet_id, dia, semana, fecha, alimento_cant, alimento_diario, alimento_acum,
-           medicina, gas_diario, gas_acum, mort_diaria, mort_acum, mort_porcentaje, observacion)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT OR REPLACE INTO sheets
+          (id, conjunto_id, nombre, granja, lote, galpon, fecha_ingreso, procedencia, cantidad)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
-            sheet.id,
-            fila.dia,
-            fila.semana,
-            fila.fecha || "",
-            fila.alimentoCant || "",
-            Number(fila.alimentoDiario) || 0,
-            Number(fila.alimentoAcum) || 0,
-            fila.medicina || "",
-            Number(fila.gasDiario) || 0,
-            Number(fila.gasAcum) || 0,
-            Number(fila.mortDiaria) || 0,
-            Number(fila.mortAcum) || 0,
-            Number(fila.mortPorcentaje) || 0,
-            fila.observacion || "",
+            s.id,
+            conjunto.value.id,
+            s.nombre,
+            s.form.granja || "",
+            s.form.lote || "",
+            s.form.galpon || "",
+            s.form.fechaIngreso || "",
+            s.form.procedencia || "",
+            Number(s.form.cantidad) || 0,
           ],
         );
+
+        // Limpiar y re-insertar filas para garantizar integridad por cada galpón
+        await database.execute(`DELETE FROM filas WHERE sheet_id = ?`, [s.id]);
+        for (const fila of s.filas) {
+          await database.execute(
+            `INSERT INTO filas
+            (sheet_id, dia, semana, fecha, alimento_cant, alimento_diario, alimento_acum,
+             medicina, gas_diario, gas_acum, mort_diaria, mort_acum, mort_porcentaje, observacion)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              s.id,
+              fila.dia,
+              fila.semana,
+              fila.fecha || "",
+              fila.alimentoCant || "",
+              Number(fila.alimentoDiario) || 0,
+              Number(fila.alimentoAcum) || 0,
+              fila.medicina || "",
+              Number(fila.gasDiario) || 0,
+              Number(fila.gasAcum) || 0,
+              Number(fila.mortDiaria) || 0,
+              Number(fila.mortAcum) || 0,
+              Number(fila.mortPorcentaje) || 0,
+              fila.observacion || "",
+            ],
+          );
+        }
       }
 
-      console.log(`✅ Guardado completado para la hoja: ${sheet.nombre}`);
+      // 3. RECONCILIACIÓN: Eliminar de la base de datos galpones que ya no existen en el array
+      const idsActuales = sheets.value.map(s => s.id);
+      if (idsActuales.length > 0) {
+        // Buscamos todos los galpones de este conjunto en la DB
+        const dbSheets = await database.select(
+          "SELECT id FROM sheets WHERE conjunto_id = ?",
+          [conjunto.value.id]
+        );
+        
+        for (const dbRow of dbSheets) {
+          // Si el ID de la base de datos NO está en nuestra lista de memoria, lo borramos
+          if (!idsActuales.includes(dbRow.id)) {
+            console.log(`🗑️ Eliminando galpón huérfano de la DB: ${dbRow.id}`);
+            await database.execute(`DELETE FROM filas WHERE sheet_id = ?`, [dbRow.id]);
+            await database.execute(`DELETE FROM sheets WHERE id = ?`, [dbRow.id]);
+          }
+        }
+      }
+
+      console.log(`✅ Sincronización completa con éxito para ${sheets.value.length} galpones.`);
 
       // Actualizamos el estado de éxito
       estadoGuardado.value = {
@@ -3904,6 +3900,7 @@ export function useSheets() {
     getTotalFundasSheet,
     onCantidadChange,
     guardar,
+    mostrarMensaje,
     modalMensaje,
     cerrarMensaje,
     modalConfirmacion,

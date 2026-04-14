@@ -6,7 +6,6 @@ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 const isForceClosing = ref(false);
 import { ask } from "@tauri-apps/plugin-dialog";
 
-
 const handleConfigClick = async () => {
   // El panel ahora se abre inmediatamente. La sincronización puede ocurrir en segundo plano.
   const existing = await WebviewWindow.getByLabel("panel-config");
@@ -170,6 +169,7 @@ const {
   calcularMortalidadHasta,
   onCantidadChange,
   guardar,
+  mostrarMensaje,
   modalMensaje,
   cerrarMensaje,
   modalConfirmacion,
@@ -203,50 +203,124 @@ onMounted(async () => {
   // Lógica de Sincronización al cerrar
   const appWindow = getCurrentWindow();
   await appWindow.onCloseRequested(async (event) => {
-    if (isForceClosing.value) return; // Permitir salida si ya se confirmó
+    if (isForceClosing.value) return;
 
     if (isDirty.value) {
       console.log(
         "⚠️ Cierre detectado con cambios pendientes. Sincronizando...",
       );
-      // Detenemos el cierre momentáneamente
       event.preventDefault();
+
+      // Mostramos una versión limpia con Spinner y sin botones
+      mostrarMensaje(
+        "Sincronizando con la nube",
+        "El sistema se cerrará automáticamente al terminar.",
+        true,
+      );
 
       // Forzar el backup
       const success = await uploadBackup(false, true);
 
       if (success) {
         isDirty.value = false;
+        // Mostramos el éxito antes de salir
+        mostrarMensaje(
+          "¡Datos asegurados!",
+          "Sincronización completada con éxito. Cerrando...",
+          true,
+        );
+        // Esperamos 0.5 segundos para que se vea el check verde
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        cerrarMensaje();
         await appWindow.close();
       } else {
-        // En lugar de 'ask' nativo, usamos el modal personalizado de la app
-        abrirConfirmacion(
-          "Fallo de Sincronización",
-          "No se pudo sincronizar la copia de seguridad en la nube (posiblemente por falta de internet).\n\n¿Deseas cerrar el programa de todos modos? Sus cambios están guardados localmente pero NO en Drive.",
-          async () => {
-            isForceClosing.value = true;
-            isDirty.value = false;
-            await appWindow.close();
-          },
-          "Cerrar de todos modos",
-          "Esperar a sincronizar",
-          "danger"
-        );
+        cerrarMensaje();
 
+        if (!isOnline.value) {
+          // CASO: SIN INTERNET (Sintetizado)
+          abrirConfirmacion(
+            "Sin conexión a internet",
+            "Datos guardados en PC.\n\nSincroniza luego abriendo la app con internet.\n\n¿Cerrar de todos modos?",
+            async () => {
+              isForceClosing.value = true;
+              isDirty.value = false;
+              await appWindow.close();
+            },
+            "Cerrar de todos modos",
+            "Esperar conexión",
+            "danger",
+            false,
+            "offline",
+          );
+        } else {
+          // CASO: OTRO ERROR
+          abrirConfirmacion(
+            "Fallo de Sincronización",
+            "No se pudo sincronizar la copia de seguridad en la nube debido a un error del sistema.\n\nSus cambios están guardados localmente.\n\n¿Deseas cerrar el programa de todos modos?",
+            async () => {
+              isForceClosing.value = true;
+              isDirty.value = false;
+              await appWindow.close();
+            },
+            "Cerrar de todos modos",
+            "Reintentar luego",
+            "danger",
+          );
+        }
       }
     }
   });
 
-
   // 🔄 RECURPERACIÓN AUTOMÁTICA (COLA DE SINCRONIZACIÓN)
-  // Cuando el internet regresa, si hay cambios pendientes, sincronizamos automáticamente.
   watch(isOnline, async (newOnline) => {
-    if (newOnline && isDirty.value && isCloudAuth.value && !isCloudLoading.value) {
-      console.log("🌐 [Cola Sync] Internet restaurado. Sincronizando cambios pendientes...");
+    // --- CASO ESPECIAL: Internet regresa mientras el modal de error offline está abierto ---
+    if (
+      newOnline &&
+      modalConfirmacion.value.visible &&
+      modalConfirmacion.value.icono === "offline"
+    ) {
+      console.log("🌐 Internet recuperado durante el cierre. Reintentando...");
+
+      cerrarConfirmacion();
+      mostrarMensaje(
+        "¡De nuevo en línea!",
+        "Sincronizando y cerrando sesión...",
+        true,
+      );
+
+      const success = await uploadBackup(false, true);
+      if (success) {
+        isDirty.value = false;
+        // Mostramos el éxito antes de salir
+        mostrarMensaje(
+          "¡Datos asegurados!",
+          "Sincronización completada con éxito. Cerrando...",
+          true,
+        );
+        // Esperamos 1.5 segundos para que se vea el check verde
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        cerrarMensaje();
+        await appWindow.close();
+      } else {
+        cerrarMensaje();
+        // Si fallara por otra razón, vuelve al error normal
+      }
+    }
+
+    // --- CASO NORMAL: Cola de sync cuando internet regresa en sesión normal ---
+    if (
+      newOnline &&
+      isDirty.value &&
+      isCloudAuth.value &&
+      !isCloudLoading.value &&
+      !modalConfirmacion.value.visible // Que no se cruce con el caso anterior
+    ) {
+      console.log(
+        "🌐 [Cola Sync] Internet restaurado. Sincronizando cambios pendientes...",
+      );
       await uploadBackup(false);
     }
   });
-
 });
 </script>
 
@@ -273,7 +347,13 @@ onMounted(async () => {
         @click="addSheet"
         title="Agregar Lote"
       >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" style="width: 18px; height: 18px;">
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="3"
+          style="width: 18px; height: 18px"
+        >
           <line x1="12" y1="5" x2="12" y2="19" />
           <line x1="5" y1="12" x2="19" y2="12" />
         </svg>
@@ -296,7 +376,11 @@ onMounted(async () => {
               ? 'Google Drive no vinculado'
               : !isOnline
                 ? 'Sin conexión a internet (Pausado)'
-                : (syncError && (syncError.includes('request for url') || syncError.includes('timeout') || syncError.includes('network') || syncError.includes('offline')))
+                : syncError &&
+                    (syncError.includes('request for url') ||
+                      syncError.includes('timeout') ||
+                      syncError.includes('network') ||
+                      syncError.includes('offline'))
                   ? 'Fallo de red (Se reintentará al conectar)'
                   : syncError
                     ? 'Error de sincronización: ' + syncError
@@ -306,9 +390,6 @@ onMounted(async () => {
                         ? 'Pendiente de sincronizar'
                         : 'Sincronizado con Drive'
           "
-
-
-
         >
           <!-- Estado: No autenticado -->
           <svg
@@ -330,7 +411,14 @@ onMounted(async () => {
           </svg>
           <!-- Estado: Sin Internet o Error de Red (Cloud Offline) -->
           <svg
-            v-else-if="!isOnline || (syncError && (syncError.includes('request for url') || syncError.includes('timeout') || syncError.includes('network') || syncError.includes('offline')))"
+            v-else-if="
+              !isOnline ||
+              (syncError &&
+                (syncError.includes('request for url') ||
+                  syncError.includes('timeout') ||
+                  syncError.includes('network') ||
+                  syncError.includes('offline')))
+            "
             class="sync-icon-status offline"
             style="color: #64748b"
             viewBox="0 0 24 24"
@@ -340,12 +428,11 @@ onMounted(async () => {
             stroke-linecap="round"
             stroke-linejoin="round"
           >
-            <path d="M22.61 16.95A5 5 0 0 0 18 10h-1.26a8 8 0 0 0-7.05-6M5 5a8 8 0 0 0 4 15h9a5 5 0 0 0 1.7-.3"></path>
+            <path
+              d="M22.61 16.95A5 5 0 0 0 18 10h-1.26a8 8 0 0 0-7.05-6M5 5a8 8 0 0 0 4 15h9a5 5 0 0 0 1.7-.3"
+            ></path>
             <line x1="1" y1="1" x2="23" y2="23"></line>
           </svg>
-
-
-
 
           <!-- Estado: Sincronizando (Cargando) -->
           <svg
@@ -391,7 +478,6 @@ onMounted(async () => {
             <circle cx="12" cy="12" r="10"></circle>
             <polyline points="12 6 12 12 16 14"></polyline>
           </svg>
-
 
           <!-- Estado: Éxito (Sincronizado) -->
           <svg
@@ -1661,10 +1747,84 @@ onMounted(async () => {
     </div>
   </div>
   <div v-if="modalMensaje.visible" class="modal-overlay">
-    <div class="modal-box">
-      <h3>{{ modalMensaje.titulo }}</h3>
-      <p>{{ modalMensaje.texto }}</p>
-      <div class="modal-actions">
+    <div class="modal-box" style="text-align: center; max-width: 350px">
+      <h3 style="margin-bottom: 20px">{{ modalMensaje.titulo }}</h3>
+
+      <!-- ESTADO DE CARGA / SINCRONIZACIÓN -->
+      <div
+        v-if="modalMensaje.cargando"
+        style="
+          margin: 20px 0;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 15px;
+        "
+      >
+        <!-- ICONO DINÁMICO SEGÚN EL TEXTO O ESTADO -->
+        <!-- Sincronizando (Flechas azules) -->
+        <svg
+          v-if="
+            modalMensaje.titulo.includes('línea') ||
+            modalMensaje.titulo.includes('nube')
+          "
+          class="sync-icon-status spin"
+          style="color: #2563eb; width: 56px; height: 56px"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"></path>
+          <polyline points="21 3 21 8 16 8"></polyline>
+        </svg>
+
+        <!-- Éxito (Check verde) -->
+        <svg
+          v-else-if="
+            modalMensaje.titulo.includes('éxito') ||
+            modalMensaje.titulo.includes('asegurados')
+          "
+          style="color: #10b981; width: 56px; height: 56px"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+          <polyline points="22 4 12 14.01 9 11.01"></polyline>
+        </svg>
+
+        <!-- Pendiente (Reloj naranja) -->
+        <svg
+          v-else
+          style="color: #f59e0b; width: 56px; height: 56px"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <circle cx="12" cy="12" r="10"></circle>
+          <polyline points="12 6 12 12 16 14"></polyline>
+        </svg>
+
+        <p style="font-weight: 500; color: #666; font-size: 1.1em">
+          {{ modalMensaje.texto }}
+        </p>
+      </div>
+
+      <!-- MENSAJE NORMAL -->
+      <p v-else style="margin-bottom: 25px; font-size: 1.1em">
+        {{ modalMensaje.texto }}
+      </p>
+
+      <div v-if="!modalMensaje.cargando" class="modal-actions">
         <button class="btn-primary" @click="cerrarMensaje">Aceptar</button>
       </div>
     </div>
@@ -1673,6 +1833,29 @@ onMounted(async () => {
   <div v-if="modalConfirmacion.visible" class="modal-overlay">
     <div class="modal-box">
       <h3>{{ modalConfirmacion.titulo }}</h3>
+
+      <!-- ICONO DE OFFLINE (Nube gris tachada) -->
+      <div
+        v-if="modalConfirmacion.icono === 'offline'"
+        style="display: flex; justify-content: center; margin: 15px 0"
+      >
+        <svg
+          class="sync-icon-status offline"
+          style="color: #64748b; width: 56px; height: 56px"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path
+            d="M22.61 16.95A5 5 0 0 0 18 10h-1.26a8 8 0 0 0-7.05-6M5 5a8 8 0 0 0 4 15h9a5 5 0 0 0 1.7-.3"
+          ></path>
+          <line x1="1" y1="1" x2="23" y2="23"></line>
+        </svg>
+      </div>
+
       <p style="white-space: pre-line">{{ modalConfirmacion.texto }}</p>
 
       <div
