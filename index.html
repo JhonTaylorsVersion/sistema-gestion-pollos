@@ -4,10 +4,45 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>sistema_gestion_pollos</title>
+    <title>Sistema Gestión Pollos</title>
+    <style>
+      /* Estilos ultra rápidos para el Skeleton */
+      body { margin: 0; background: #e9ecef; }
+      #app-loader { padding: 20px; font-family: Arial, sans-serif; display: flex; flex-direction: column; gap: 15px; }
+      .sk-tabs { display: flex; gap: 8px; margin-bottom: 5px; }
+      .sk-tab { width: 100px; height: 35px; background: #fff; border: 1px solid #111; border-radius: 6px; }
+      .sk-sheet { flex: 1; height: 80vh; background: #fff; border: 2px solid #111; padding: 20px; }
+      .sk-header { width: 50%; height: 30px; background: #f0f0f0; margin-bottom: 20px; }
+      .sk-row { height: 32px; background: #fafafa; border-bottom: 2px solid #000; margin-bottom: 10px; }
+      
+      .shimmer {
+        background: linear-gradient(90deg, #f3f3f3 25%, #e0e0e0 50%, #f3f3f3 75%);
+        background-size: 200% 100%;
+        animation: shimmer 1.5s infinite linear;
+      }
+      @keyframes shimmer {
+        0% { background-position: -200% 0; }
+        100% { background-position: 200% 0; }
+      }
+    </style>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <div id="app-loader">
+        <div class="sk-tabs">
+          <div class="sk-tab shimmer"></div>
+          <div class="sk-tab shimmer"></div>
+          <div class="sk-tab" style="width: 40px; border-radius: 50%; height: 40px;"></div>
+        </div>
+        <div class="sk-sheet">
+          <div class="sk-header shimmer"></div>
+          <div class="sk-row shimmer"></div>
+          <div class="sk-row shimmer"></div>
+          <div class="sk-row shimmer"></div>
+          <div class="sk-row shimmer"></div>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

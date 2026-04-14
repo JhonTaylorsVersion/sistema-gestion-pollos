@@ -252,8 +252,22 @@ onMounted(async () => {
             false,
             "offline",
           );
+        } else if (!isCloudAuth.value) {
+          // CASO: SIN CUENTA VINCULADA
+          abrirConfirmacion(
+            "Copia de seguridad inactiva",
+            "No has vinculado ninguna cuenta de Google Drive.\n\nTus datos se guardarán localmente, pero no habrá respaldo en la nube.\n\n¿Deseas cerrar el programa de todos modos?",
+            async () => {
+              isForceClosing.value = true;
+              isDirty.value = false;
+              await appWindow.close();
+            },
+            "Cerrar la aplicación",
+            "Vincular cuenta ahora",
+            "normal",
+          );
         } else {
-          // CASO: OTRO ERROR
+          // CASO: OTRO ERROR (Sistema/Drive)
           abrirConfirmacion(
             "Fallo de Sincronización",
             "No se pudo sincronizar la copia de seguridad en la nube debido a un error del sistema.\n\nSus cambios están guardados localmente.\n\n¿Deseas cerrar el programa de todos modos?",

@@ -7,14 +7,11 @@ import {
   watch,
 } from "vue";
 import Database from "@tauri-apps/plugin-sql";
-import ExcelJS from "exceljs";
-import { jsPDF } from "jspdf";
-import autoTable from "jspdf-autotable";
-import JSZip from "jszip";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeFile } from "@tauri-apps/plugin-fs";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useDrive, isDirty } from "./useDrive";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 const isInternalAction = ref(false);
 
@@ -1657,6 +1654,8 @@ export function useSheets() {
   };
 
   const crearExcelBuffer = async () => {
+    // 🚚 CARGA BAJO DEMANDA (Lazy Load)
+    const ExcelJS = (await import("exceljs")).default;
     recalcularTodasLasHojas();
 
     const workbook = new ExcelJS.Workbook();
@@ -2135,6 +2134,10 @@ export function useSheets() {
   };
 
   const crearPdfBuffer = async () => {
+    // 🚚 CARGA BAJO DEMANDA (Lazy Load)
+    const { jsPDF } = await import("jspdf");
+    const autoTable = (await import("jspdf-autotable")).default;
+
     recalcularTodasLasHojas();
 
     const doc = new jsPDF("l", "mm", "a4");
@@ -2490,6 +2493,8 @@ export function useSheets() {
           crearExcelBuffer(),
         ]);
 
+        // 🚚 CARGA BAJO DEMANDA (Lazy Load)
+        const JSZip = (await import("jszip")).default;
         const zip = new JSZip();
         zip.file(`${nombreBase}.pdf`, pdfBuffer);
         zip.file(`${nombreBase}.xlsx`, excelBuffer);
@@ -3544,6 +3549,15 @@ export function useSheets() {
   };
 
   onMounted(async () => {
+    // ⚡ MOSTRAR VENTANA LO ANTES POSIBLE (Ready-to-Show)
+    // Lo hacemos aquí para que sea lo primero, incluso antes de la DB.
+    try {
+      const appWindow = getCurrentWindow();
+      await appWindow.show();
+    } catch (e) {
+      console.error("Error mostrando ventana:", e);
+    }
+
     try {
       await initDB();
       // 🔥 AUTO-RESCATE: Cargamos el último lote guardado al arrancar
