@@ -15,6 +15,8 @@ import { useDrive } from "./composables/useDrive";
 import { useNotify } from "./composables/useNotify";
 import SyncIcon from "./components/SyncIcon.vue";
 
+const isDev = import.meta.env.DEV;
+
 type PdfCell =
   | string
   | number
@@ -238,6 +240,20 @@ const showLogoutConfirmModal = ref(false);
 const showMasterKeyUploadModal = ref(false);
 const pendingMasterKeyBytes = ref<Uint8Array | null>(null);
 const subiendoLlaveADrive = ref(false);
+const showDeleteOldKeyConfirm = ref(false);
+
+const confirmarEliminarLlaveInutil = async () => {
+  if (currentKeyPath.value) {
+    try {
+      await remove(currentKeyPath.value);
+      mostrarToast("Archivo eliminado permanentemente.");
+    } catch (err) {
+      console.error("Error al eliminar el archivo .key:", err);
+      mostrarToast("No se pudo eliminar el archivo físico.", "error");
+    }
+  }
+  showDeleteOldKeyConfirm.value = false;
+};
 
 const { toast, toastY, draggingToast, mostrarToast, handleToastMouseDown } =
   useNotify();
@@ -2280,20 +2296,8 @@ const procesarEliminacionCon2FA = async () => {
 
         if (llaveValidada.value) {
           if (currentKeyPath.value) {
-            const delLlave = await ask(
-              "Esta Llave Maestra ya no será válida para futuras configuraciones. ¿Deseas eliminar el archivo permanentemente de tu equipo?",
-              {
-                title: "Eliminar Llave Inútil",
-                kind: "warning",
-              },
-            );
-            if (delLlave) {
-              try {
-                await remove(currentKeyPath.value);
-              } catch (err) {
-                console.error("Error al eliminar el archivo .key:", err);
-              }
-            }
+            // Reemplazado modal nativo por modal personalizado
+            showDeleteOldKeyConfirm.value = true;
           } else {
             // Caso de Drop (no tenemos el path)
             mostrarToast(
@@ -3730,6 +3734,7 @@ const reabrirMain = async () => {
 
                 <!-- --- BOTÓN DE EMERGENCIA (BORRAR DESPUÉS DE USAR) --- -->
                 <div
+                  v-if="isDev"
                   class="sync-card emergency-zone"
                   style="
                     margin-top: 20px;
@@ -4165,6 +4170,50 @@ const reabrirMain = async () => {
           @click="showLogoutConfirmModal = false"
         >
           Cancelar
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL PARA ELIMINAR LLAVE MAESTRA OBSOLETA (PERSONALIZADO) -->
+  <div v-if="showDeleteOldKeyConfirm" class="modal-overlay">
+    <div
+      class="modal-box danger-modal animate-fade-in"
+      style="max-width: 440px; text-align: center; padding: 40px"
+    >
+      <div class="modal-header-icon-danger">
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          style="width: 64px; height: 64px"
+        >
+          <path
+            d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"
+          ></path>
+          <line x1="12" y1="9" x2="12" y2="13"></line>
+          <line x1="12" y1="17" x2="12.01" y2="17"></line>
+        </svg>
+      </div>
+
+      <h3 style="margin-top: 0; margin-bottom: 12px; font-size: 24px">
+        Eliminar Llave Inútil
+      </h3>
+      <p style="text-align: center; color: #64748b; margin-bottom: 24px">
+        Esta Llave Maestra ya no será válida para futuras configuraciones.
+        ¿Deseas eliminar el archivo permanentemente de tu equipo?
+      </p>
+
+      <div class="modal-actions-vertical">
+        <button class="btn-unlink-full" @click="confirmarEliminarLlaveInutil">
+          Sí, eliminar archivo
+        </button>
+        <button
+          class="btn-cancel-modal"
+          @click="showDeleteOldKeyConfirm = false"
+        >
+          No, conservar archivo
         </button>
       </div>
     </div>
