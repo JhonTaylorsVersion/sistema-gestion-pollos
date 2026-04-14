@@ -2077,9 +2077,20 @@ watch(
       seccionActiva.value = "sincronizacion";
       subSeccionSync.value = "seguridad";
 
-      // Si no estamos ya verificando identidad, abrimos el setup automáticamente
+      // 🛡️ DECISIÓN INTELIGENTE: ¿Es configuración nueva o recuperación?
+      const isRecovery = !!cloudAccountState.value?.twoFactor?.confirmed;
+
       if (!show2FAVerifyModal.value && !show2FASetupModal.value) {
-        iniciar2FASetup();
+        if (isRecovery) {
+          console.log("🔍 [Guardia] Detectada identidad en nube. Iniciando Verificación de Identidad.");
+          verifyTargetFileId.value = "LOGIN_IDENTITY_UNLOCK";
+          input2FACode.value = "";
+          llaveValidada.value = false;
+          show2FAVerifyModal.value = true;
+        } else {
+          console.log("🔍 [Guardia] Usuario nuevo. Iniciando Configuración 2FA.");
+          iniciar2FASetup();
+        }
       }
     }
   },
@@ -2137,32 +2148,20 @@ const iniciarLoginConSeguridad = async () => {
       const state = await fetchAccountState();
 
       if (state?.twoFactor?.confirmed && !is2FAConfirmed.value) {
-        // CASO B: Reinstalación/Equipo Nuevo - Identidad Confirmada detectada
-        mostrarToast(
-          "Identidad detectada. Ingresa tu código de seguridad para continuar.",
-          "info",
-        );
-        // Preparamos el modal de verificación
-        verifyTargetFileId.value = "LOGIN_IDENTITY_UNLOCK";
-        input2FACode.value = "";
-        llaveValidada.value = false;
-        show2FAVerifyModal.value = true;
+        // Dejamos que el watcher (Guardia de Integridad) maneje la apertura del modal
+        // al detectar el cambio en cloudAccountState para evitar duplicidad.
+        console.log("ℹ️ [Login] Identidad en nube detectada. El Guardia manejará el modal.");
       } else {
         // 2. Si no hay estado oficial, revisamos backups (Modo Migración Legado)
         await listBackupsDrive();
 
         if (backupsDrive.value.length > 0) {
           // CASO C: Cuenta Heredada (Sin manifiesto pero con datos)
-          mostrarToast(
-            "¡Bienvenido de nuevo! Detectamos copias previas. Restaura tu sistema para reconstruir tu identidad.",
-            "info",
-          );
+          console.log("ℹ️ [Login] Backups heredados encontrados.");
         } else {
           // CASO A: Usuario Nuevo Real
-          mostrarToast(
-            "Conexión exitosa. Por seguridad, configura tu Authenticator.",
-          );
-          iniciar2FASetup();
+          // Dejamos que el watcher maneje la apertura si corresponde.
+          console.log("ℹ️ [Login] Usuario nuevo detectado.");
         }
       }
     }
