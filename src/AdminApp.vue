@@ -3120,17 +3120,7 @@ const reabrirMain = async () => {
           <div class="sync-container">
             <div v-if="!authenticatedDrive" class="sync-card empty">
               <div class="sync-icon-circle">
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                >
-                  <path d="M12 10v6m0 0l-3-3m3 3l3-3" />
-                  <path
-                    d="M22 12c0 3-2.5 5.5-5.5 5.5s-5.5-2.5-5.5-5.5 2.5-5.5 5.5-5.5 5.5 2.5 5.5 5.5z"
-                  />
-                </svg>
+                <SyncIcon status="not-linked" :size="44" />
               </div>
               <h2>Sin conexión a Google Drive</h2>
               <p>
