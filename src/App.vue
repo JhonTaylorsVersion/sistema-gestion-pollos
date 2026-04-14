@@ -112,6 +112,19 @@ const cambiarAEstadisticas = () => {
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
+const formatearIdParaUsuario = (id) => {
+  if (!id) return "";
+  // El ID real es algo como "LOTE01-F3A2B1C0:ABR-2026"
+  // Queremos mostrar: "LOTE01:ABR-2026"
+  const partes = id.split(":");
+  if (partes.length < 2) return id;
+
+  const prefijoLimpio = partes[0].split("-")[0];
+  const fecha = partes[1];
+
+  return `${prefijoLimpio}:${fecha}`;
+};
+
 const {
   uploadBackup,
   isDirty,
@@ -516,10 +529,11 @@ onMounted(async () => {
         <div class="title-block">
           <h1>CONTROL PARA POLLOS DE CARNE</h1>
           <p class="sheet-id">
-            <strong>Código Lote:</strong> {{ conjunto.id }}
+            <strong>Código Lote:</strong> {{ formatearIdParaUsuario(conjunto.id) }}
           </p>
           <p class="sheet-id">
-            <strong>Código Galpón:</strong> {{ currentSheet.id }}
+            <strong>Código Galpón:</strong>
+            {{ formatearIdParaUsuario(currentSheet.id) }}
           </p>
         </div>
       </div>
@@ -1597,7 +1611,7 @@ onMounted(async () => {
         <div class="title-block">
           <h1>ESTADÍSTICAS GENERALES</h1>
           <p class="sheet-id">
-            <strong>Código Lote:</strong> {{ conjunto.id }}
+            <strong>Código Lote:</strong> {{ formatearIdParaUsuario(conjunto.id) }}
           </p>
           <p class="sheet-id"><strong>Nombre:</strong> {{ conjunto.nombre }}</p>
           <p class="sheet-id">
@@ -1657,7 +1671,7 @@ onMounted(async () => {
           <tbody>
             <tr v-for="item in resumenGalpones" :key="item.id">
               <td>{{ item.numero }}</td>
-              <td>{{ item.id }}</td>
+              <td :title="item.id">{{ formatearIdParaUsuario(item.id) }}</td>
               <td>{{ item.galpon }}</td>
               <td>{{ item.lote }}</td>
               <td>{{ item.cantidad }}</td>

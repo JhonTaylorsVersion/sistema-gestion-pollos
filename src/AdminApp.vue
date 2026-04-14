@@ -213,6 +213,25 @@ const initDB = async (): Promise<Database> => {
   return dbPromise;
 };
 
+const formatearIdParaUsuario = (id: string | null | undefined) => {
+  if (!id) return "";
+  const partes = id.split(":");
+  if (partes.length < 2) return id;
+
+  const prefijoLimpio = partes[0].split("-")[0];
+  const fecha = partes[1];
+
+  return `${prefijoLimpio}:${fecha}`;
+};
+
+const formatearNombreBackup = (nombre: string) => {
+  if (!nombre) return "Respaldo";
+  if (nombre === "Llave_Maestra_Seguridad.key") return "Llave de Seguridad (Maestra)";
+  if (nombre.startsWith("pollos_backup")) return "Copia de Seguridad (Cloud)";
+  if (nombre.endsWith(".db")) return "Base de Datos";
+  return nombre;
+};
+
 // --- Estados de Seguridad 2FA ---
 const twoFactorSecret = ref<string | null>(null);
 const is2FAConfirmed = ref(false);
@@ -1126,13 +1145,18 @@ const galponesFiltrados = computed(() => {
   if (!texto) return galponesLista.value;
 
   return galponesLista.value.filter((g) => {
+    const idUsuario = formatearIdParaUsuario(g.id).toLowerCase();
+    const idConjuntoUsuario = formatearIdParaUsuario(g.conjunto_id).toLowerCase();
+
     return (
       g.id?.toLowerCase().includes(texto) ||
+      idUsuario.includes(texto) ||
       g.nombre?.toLowerCase().includes(texto) ||
       g.granja?.toLowerCase().includes(texto) ||
       g.lote?.toLowerCase().includes(texto) ||
       g.galpon?.toLowerCase().includes(texto) ||
       g.conjunto_id?.toLowerCase().includes(texto) ||
+      idConjuntoUsuario.includes(texto) ||
       g.conjunto_nombre?.toLowerCase().includes(texto)
     );
   });
@@ -1144,8 +1168,11 @@ const conjuntosFiltrados = computed(() => {
   if (!texto) return conjuntosLista.value;
 
   return conjuntosLista.value.filter((c) => {
+    const idUsuario = formatearIdParaUsuario(c.id).toLowerCase();
+
     return (
       c.id?.toLowerCase().includes(texto) ||
+      idUsuario.includes(texto) ||
       c.nombre?.toLowerCase().includes(texto) ||
       (c.descripcion || "").toLowerCase().includes(texto)
     );
@@ -2822,7 +2849,7 @@ const reabrirMain = async () => {
                     :key="grupo.id"
                     class="grupo-conjunto"
                   >
-                    <div class="grupo-header">{{ grupo.id }}</div>
+                    <div class="grupo-header">{{ formatearIdParaUsuario(grupo.id) }}</div>
                     <div class="grupo-botones">
                       <button
                         v-for="g in grupo.galpones"
@@ -2874,10 +2901,10 @@ const reabrirMain = async () => {
                     <h1>CONTROL PARA POLLOS DE CARNE</h1>
                     <p class="sheet-id">
                       <strong>Código Lote:</strong>
-                      {{ currentGalpon.codigo_conjunto }}
+                      {{ formatearIdParaUsuario(currentGalpon.codigo_conjunto) }}
                     </p>
                     <p class="sheet-id">
-                      <strong>Código Galpón:</strong> {{ currentGalpon.id }}
+                      <strong>Código Galpón:</strong> {{ formatearIdParaUsuario(currentGalpon.id) }}
                     </p>
                   </div>
                 </div>
@@ -3280,7 +3307,7 @@ const reabrirMain = async () => {
                     <h1>ESTADÍSTICAS GENERALES</h1>
                     <p class="sheet-id">
                       <strong>Código Lote:</strong>
-                      {{ galpones[0]?.codigo_conjunto || "—" }}
+                      {{ formatearIdParaUsuario(galpones[0]?.codigo_conjunto) || "—" }}
                     </p>
                     <p class="sheet-id">
                       <strong>Nombre:</strong>
@@ -3341,7 +3368,7 @@ const reabrirMain = async () => {
                     <tbody>
                       <tr v-for="item in resumenGalpones" :key="item.id">
                         <td>{{ item.numero }}</td>
-                        <td>{{ item.id }}</td>
+                        <td :title="item.id">{{ formatearIdParaUsuario(item.id) }}</td>
                         <td>{{ item.galpon }}</td>
                         <td>{{ item.lote }}</td>
                         <td>{{ item.cantidad }}</td>
@@ -3415,7 +3442,7 @@ const reabrirMain = async () => {
                         Ver
                       </button>
                     </td>
-                    <td>{{ item.id }}</td>
+                    <td :title="item.id">{{ formatearIdParaUsuario(item.id) }}</td>
                     <td>{{ item.nombre || "—" }}</td>
                     <td>{{ item.granja || "—" }}</td>
                     <td>{{ item.lote || "—" }}</td>
@@ -3423,7 +3450,7 @@ const reabrirMain = async () => {
                     <td>{{ item.fecha_ingreso || "—" }}</td>
                     <td>{{ item.procedencia || "—" }}</td>
                     <td>{{ item.cantidad ?? "—" }}</td>
-                    <td>{{ item.conjunto_id || "—" }}</td>
+                    <td :title="item.conjunto_id">{{ formatearIdParaUsuario(item.conjunto_id) }}</td>
                     <td>{{ item.conjunto_nombre || "—" }}</td>
                   </tr>
 
@@ -3483,7 +3510,7 @@ const reabrirMain = async () => {
                         Ver
                       </button>
                     </td>
-                    <td>{{ item.id }}</td>
+                    <td :title="item.id">{{ formatearIdParaUsuario(item.id) }}</td>
                     <td>{{ item.nombre || "—" }}</td>
                     <td>{{ item.descripcion || "—" }}</td>
                     <td>{{ item.totalGalpones }}</td>
@@ -3844,7 +3871,17 @@ const reabrirMain = async () => {
                     </thead>
                     <tbody>
                       <tr v-for="file in backupsDrive" :key="file.id">
-                        <td>{{ file.name }}</td>
+                        <td :title="file.name">
+                          <div style="display: flex; align-items: center; gap: 8px">
+                            <svg v-if="file.name.endsWith('.key')" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width: 16px; height: 16px; color: #f59e0b">
+                              <path d="M15 6a5 5 0 1 0-5 5v3l-1 1v2l1 1h2l1-1v-2l1-1v-3a5 5 0 0 0 4-5z" /><circle cx="15" cy="6" r="1" />
+                            </svg>
+                            <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width: 16px; height: 16px; color: #3b82f6">
+                              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                            </svg>
+                            {{ formatearNombreBackup(file.name) }}
+                          </div>
+                        </td>
                         <td>
                           <span class="location-badge">
                             {{ formatearUbicacionDrive(file.modifiedTime) }}

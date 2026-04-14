@@ -14,10 +14,10 @@ import { useDrive, isDirty, setConfirmHandler } from "./useDrive";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 const isInternalAction = ref(false);
+let db = null;
+let tablesInitialized = false;
 
 export function useSheets() {
-  let db = null;
-
   const {
     isAuthenticated: isCloudAuth,
     uploadBackup,
@@ -29,9 +29,11 @@ export function useSheets() {
 
 
   const initDB = async () => {
-    if (db) return db;
-
+    // Database.load es inteligente y devuelve el mismo pool si ya está cargado.
+    // Al llamarlo siempre, nos aseguramos de que si el pool se cerró por algún motivo, se vuelva a abrir.
     db = await Database.load("sqlite:pollos.db");
+
+    if (tablesInitialized) return db;
 
     await db.execute(`
   CREATE TABLE IF NOT EXISTS conjuntos (
@@ -77,6 +79,7 @@ export function useSheets() {
     )
   `);
 
+    tablesInitialized = true;
     return db;
   };
 
@@ -276,9 +279,9 @@ export function useSheets() {
     const meses = ["ENE", "FEB", "MAR", "ABR", "MAY", "JUN", "JUL", "AGO", "SEP", "OCT", "NOV", "DIC"];
     const mes = meses[fecha.getMonth()];
     const numeroFormateado = String(numero).padStart(2, "0");
-    const uniquePart = Date.now().toString().slice(-4);
+    const uniquePart = crypto.randomUUID().split("-")[0].toUpperCase();
 
-    // Formato: LOTE01-1234:ABR-2026 (Mantenemos el formato para que el auto-rescate siga funcionando)
+    // Formato: LOTE01-ABCD:ABR-2026
     return `LOTE${numeroFormateado}-${uniquePart}:${mes}-${year}`;
   };
 
@@ -294,9 +297,9 @@ export function useSheets() {
     const meses = ["ENE", "FEB", "MAR", "ABR", "MAY", "JUN", "JUL", "AGO", "SEP", "OCT", "NOV", "DIC"];
     const mes = meses[fecha.getMonth()];
     const numeroFormateado = String(numero).padStart(2, "0");
-    const uniquePart = Date.now().toString().slice(-4);
+    const uniquePart = crypto.randomUUID().split("-")[0].toUpperCase();
 
-    // Formato: GAL01-5678:ABR-2026
+    // Formato: GAL01-EFGH:ABR-2026
     return `GAL${numeroFormateado}-${uniquePart}:${mes}-${year}`;
   };
 
@@ -1188,7 +1191,7 @@ export function useSheets() {
     };
   };
 
-  const eliminarSheet = () => {
+  const eliminarSheet = async () => {
     const index = contextMenu.value.index;
     if (index === null || index === undefined) return;
 
@@ -1206,27 +1209,31 @@ export function useSheets() {
     // Extraemos los nombres para la confirmación
     const sheetNames = toDelete.map((i) => sheets.value[i].nombre).join(", ");
 
-    abrirConfirmacion(
+    const confirmado = await abrirConfirmacion(
       isMultiple ? "Eliminar hojas" : "Eliminar hoja",
       isMultiple
         ? `¿Seguro que deseas eliminar las ${toDelete.length} hojas seleccionadas?\n(${sheetNames})`
         : `¿Seguro que deseas eliminar la hoja "${sheets.value[index].nombre}"?\nID: ${sheets.value[index].id}`,
-      () => {
-        // Filtramos para quedarnos con las hojas que NO están en la lista de borrado
-        sheets.value = sheets.value.filter((_, i) => !toDelete.includes(i));
-        renombrarSheets();
-
-        // Reseteamos qué hoja ver y nuestra selección
-        if (activeTab.value === "stats") {
-          selectedTabs.value = [];
-        } else {
-          activeTab.value = Math.max(0, sheets.value.length - 1);
-          selectedTabs.value = [activeTab.value];
-        }
-
-        cerrarMenuContextual();
-      },
+      "Eliminar",
+      "Cancelar",
+      "danger",
     );
+
+    if (confirmado) {
+      // Filtramos para quedarnos con las hojas que NO están en la lista de borrado
+      sheets.value = sheets.value.filter((_, i) => !toDelete.includes(i));
+      renombrarSheets();
+
+      // Reseteamos qué hoja ver y nuestra selección
+      if (activeTab.value === "stats") {
+        selectedTabs.value = [];
+      } else {
+        activeTab.value = Math.max(0, sheets.value.length - 1);
+        selectedTabs.value = [activeTab.value];
+      }
+
+      cerrarMenuContextual();
+    }
   };
 
   const cerrarMenuContextual = () => {
@@ -2566,24 +2573,26 @@ export function useSheets() {
       );
 
       // 5. Mostrar tu modal de confirmación con la opción de abrir la carpeta
-      abrirConfirmacion(
+      const abrirUbicacion = await abrirConfirmacion(
         "Exportación exitosa",
         `El archivo se guardó correctamente en:\n${rutaDestino}\n\n¿Deseas abrir la ubicación del archivo?`,
-        async () => {
-          try {
-            // Abre la carpeta en el explorador de archivos del sistema
-            await revealItemInDir(rutaDestino);
-          } catch (err) {
-            console.error("Error al abrir la carpeta:", err);
-            mostrarMensaje(
-              "Error",
-              "No se pudo abrir la ubicación del archivo.",
-            );
-          }
-        },
-        "Abrir ubicación", // Texto del botón de confirmación
-        "success", // Pasamos el tipo "success" o "normal" según cómo lo manejes
+        "Abrir ubicación",
+        "Cerrar",
+        "normal",
       );
+
+      if (abrirUbicacion) {
+        try {
+          // Abre la carpeta en el explorador de archivos del sistema
+          await revealItemInDir(rutaDestino);
+        } catch (err) {
+          console.error("Error al abrir la carpeta:", err);
+          mostrarMensaje(
+            "Error",
+            "No se pudo abrir la ubicación del archivo.",
+          );
+        }
+      }
     } catch (error) {
       console.error("Error al exportar:", error);
 
@@ -2781,17 +2790,23 @@ export function useSheets() {
     }
   };
 
+  let isSaving = false;
+  let savePending = false;
+
   const guardar = async (esManual = false) => {
-    // Si ya estamos en medio de una acción interna, evitamos redundancia
-    if (isInternalAction.value) return;
+    // Si ya estamos guardando, marcamos que necesitaremos otra pasada al terminar
+    if (isSaving) {
+      savePending = true;
+      return;
+    }
 
     // Asegurarnos de que sea un booleano puro (los botones a veces envían el objeto del evento)
     const manual = esManual === true;
 
-    if (!currentSheet.value) return;
+    if (sheets.value.length === 0) return;
 
     try {
-      isInternalAction.value = true; // 🔇 ACTIVAR SILENCIADOR
+      isSaving = true;
       const database = await initDB();
 
       // 1. Guardar/Actualizar el Conjunto (Lote)
@@ -2806,7 +2821,10 @@ export function useSheets() {
 
       // 2. Guardar TODOS los galpones actuales uno por uno
       for (const s of sheets.value) {
+        // El recalculo modifica reactivamente el objeto, usamos el silenciador SOLO aquí
+        isInternalAction.value = true;
         recalcularSheet(s);
+        isInternalAction.value = false;
         
         await database.execute(
           `INSERT OR REPLACE INTO sheets
@@ -2909,7 +2927,14 @@ export function useSheets() {
           : "Ocurrió un error al guardar automáticamente",
       };
     } finally {
-      isInternalAction.value = false; // 🔊 DESACTIVAR SILENCIADOR
+      isSaving = false;
+      isInternalAction.value = false;
+
+      // Si hubo cambios mientras guardábamos, disparamos otro guardado
+      if (savePending) {
+        savePending = false;
+        setTimeout(() => guardar(false), 200);
+      }
     }
   };
 
@@ -3566,17 +3591,19 @@ export function useSheets() {
     historialDeshacer.value = [];
   };
 
-  const nuevoConjunto = () => {
-    abrirConfirmacion(
+  const nuevoConjunto = async () => {
+    const confirmado = await abrirConfirmacion(
       "Nuevo conjunto",
       "¿Deseas crear un nuevo conjunto? Se limpiarán los datos actuales en pantalla.",
-      () => {
-        reiniciarConjunto();
-      },
       "Crear",
-      "primary", // opcional
+      "Cancelar",
+      "normal",
       true,
     );
+
+    if (confirmado) {
+      reiniciarConjunto();
+    }
   };
 
   onMounted(async () => {

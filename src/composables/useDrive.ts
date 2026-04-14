@@ -505,7 +505,8 @@ export function useDrive() {
         const { default: Database } = await import("@tauri-apps/plugin-sql");
         const dbIntegrity = await Database.load("sqlite:pollos.db");
         const check = await dbIntegrity.select<any[]>("PRAGMA integrity_check");
-        await dbIntegrity.close();
+        // No cerramos la conexión aquí porque el pool es compartido por todo el app
+        // y cerrarlo causaría que el resto de componentes fallen con "closed pool".
 
         if (!check || check[0]["integrity_check"] !== "ok") {
           isDatabaseCorrupted.value = true;

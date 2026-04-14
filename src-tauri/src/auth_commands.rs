@@ -1,6 +1,6 @@
 use totp_rs::{Algorithm, TOTP, Secret};
 use aes_gcm::{
-    aead::{Aead, KeyInit, Payload},
+    aead::{Aead, KeyInit},
     Aes256Gcm, Nonce
 };
 use rand::RngCore;
