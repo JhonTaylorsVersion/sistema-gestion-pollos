@@ -2435,7 +2435,12 @@ const reabrirMain = async () => {
     <div v-else class="dashboard-page">
       <!-- --- BANNER DE ALERTA DE SEGURIDAD (INTEGRIDAD) --- -->
       <div v-if="requiereSeguridadUrgente" class="security-integrity-banner animate-fade-in">
-        <div class="integrity-icon">🔐</div>
+        <div class="integrity-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+            <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+          </svg>
+        </div>
         <div class="integrity-text">
           <strong>Acceso restringido:</strong> Tu cuenta requiere protección 2FA. Por favor, <strong>restaura tu backup</strong> para recuperar tu clave anterior o <strong>configura una nueva</strong> en el panel de seguridad.
         </div>
@@ -3807,7 +3812,11 @@ const reabrirMain = async () => {
   <div v-if="showRecoveryModal" class="modal-overlay">
     <div class="modal-box recovery-codes-box">
       <div class="security-header success">
-        <div class="security-icon">✅</div>
+        <div class="security-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="20 6 9 17 4 12" />
+          </svg>
+        </div>
         <h3>Seguridad Activada: Llave Maestra</h3>
       </div>
       <p>
@@ -3817,19 +3826,18 @@ const reabrirMain = async () => {
         podrá leerla.
       </p>
 
-      <div class="key-preview-box">
+      <div class="key-preview-box animate-scale-in">
         <div class="key-icon">
           <svg
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
-            stroke-width="2"
+            stroke-width="2.2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
           >
-            <path
-              d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"
-            />
-            <path d="m3.3 7 8.7 5 8.7-5" />
-            <path d="M12 22V12" />
+            <path d="M15 6a5 5 0 1 0-5 5v3l-1 1v2l1 1h2l1-1v-2l1-1v-3a5 5 0 0 0 4-5z" />
+            <circle cx="15" cy="6" r="1" />
           </svg>
         </div>
         <div class="key-status">
@@ -5416,7 +5424,21 @@ const reabrirMain = async () => {
 }
 
 .integrity-icon {
-  font-size: 18px;
+  width: 42px;
+  height: 42px;
+  background: white;
+  border-radius: 12px;
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  color: #ef4444;
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.15);
+  flex-shrink: 0;
+}
+
+.integrity-icon svg {
+  width: 22px;
+  height: 22px;
 }
 
 .sidebar-btn-back:disabled {
@@ -5517,7 +5539,18 @@ const reabrirMain = async () => {
 }
 
 .security-icon {
-  font-size: 40px;
+  width: 60px;
+  height: 60px;
+  border-radius: 18px;
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 10px;
+}
+
+.security-icon svg {
+  width: 32px;
+  height: 32px;
 }
 .sync-tabs {
   display: flex;
@@ -5895,7 +5928,8 @@ const reabrirMain = async () => {
 .security-header.success .security-icon {
   background: #ecfdf5;
   color: #10b981;
-  font-size: 24px;
+  border: 1px solid rgba(16, 185, 129, 0.2);
+  box-shadow: 0 8px 16px rgba(16, 185, 129, 0.1);
 }
 
 /* Estilos Mandatorios Recovery */
@@ -6049,29 +6083,66 @@ const reabrirMain = async () => {
 }
 
 .key-preview-box {
-  background: #0f172a;
-  border-radius: 12px;
-  padding: 30px 20px;
+  background: #fcfdfe;
+  border-radius: 24px;
+  padding: 45px 30px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 15px;
-  margin: 20px 0;
-  border: 1px solid #334155;
-  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.3);
+  gap: 25px;
+  margin: 25px 0;
+  border: 1px solid #eef2f7;
+  box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.03), inset 0 2px 4px rgba(255, 255, 255, 0.8);
+  position: relative;
+  overflow: hidden;
+}
+
+.key-preview-box::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 6px;
+  background: linear-gradient(90deg, #10b981, #3b82f6);
+  opacity: 0.8;
 }
 
 .key-icon {
-  font-size: 40px;
-  filter: drop-shadow(0 0 8px #3b82f6);
+  width: 80px;
+  height: 80px;
+  background: #ffffff;
+  border-radius: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #10b981;
+  box-shadow: 0 12px 20px -8px rgba(16, 185, 129, 0.2);
+  border: 1px solid #e2e8f0;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  z-index: 1;
+}
+
+.key-icon svg {
+  width: 38px;
+  height: 38px;
+  filter: drop-shadow(0 0 5px rgba(16, 185, 129, 0.2));
 }
 
 .key-status {
-  color: #94a3b8;
-  font-family: "Courier New", Courier, monospace;
+  color: #334155;
+  font-family: "JetBrains Mono", "Courier New", Courier, monospace;
   font-size: 13px;
   text-align: center;
-  letter-spacing: 0.5px;
+  letter-spacing: -0.2px;
+  z-index: 1;
+  background: #ffffff;
+  padding: 12px 24px;
+  border-radius: 14px;
+  border: 1px solid #e2e8f0;
+  font-weight: 700;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.02);
 }
 
 .recovery-item {
