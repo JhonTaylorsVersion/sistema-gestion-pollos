@@ -7,7 +7,7 @@ import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import JSZip from "jszip";
 import { save, ask, open } from "@tauri-apps/plugin-dialog";
-import { writeFile, readFile, remove, rename } from "@tauri-apps/plugin-fs";
+import { writeFile, readFile, remove, rename, exists } from "@tauri-apps/plugin-fs";
 
 import { revealItemInDir, openUrl } from "@tauri-apps/plugin-opener";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -243,10 +243,13 @@ const subiendoLlaveADrive = ref(false);
 const showDeleteOldKeyConfirm = ref(false);
 const databaseMalformed = ref(false);
 const showRecoverySuccessModal = ref(false);
+const recoveryType = ref<"local" | "clean">("clean");
 
 const cerrarRecoverySuccessModal = () => {
   showRecoverySuccessModal.value = false;
-  cambiarSeccion("sincronizacion");
+  if (recoveryType.value === "clean") {
+    cambiarSeccion("sincronizacion");
+  }
 };
 
 const repararBaseDeDatos = async () => {
@@ -268,10 +271,21 @@ const repararBaseDeDatos = async () => {
 
       const dbPath = await invoke<string>("get_db_path");
       const backupPath = `${dbPath}.malformed_${Date.now()}`;
+      const bakPath = `${dbPath}.bak`;
+
+      // 1. Aislar el archivo dañado
       await rename(dbPath, backupPath);
 
-      // 🚩 GUARDAR FLAG PARA EL PRÓXIMO INICIO (EVITAR FALSOS POSITIVOS)
-      localStorage.setItem("db_recovery_flag", "true");
+      // 2. Intentar Recuperación Local (Plan A)
+      const hasBak = await exists(bakPath);
+      if (hasBak) {
+        console.log("📦 [Rescate] Encontrado respaldo local .bak. Restaurando...");
+        await rename(bakPath, dbPath);
+        localStorage.setItem("db_recovery_flag", "local");
+      } else {
+        console.log("📦 [Rescate] No hay respaldo local. Iniciando sistema limpio.");
+        localStorage.setItem("db_recovery_flag", "clean");
+      }
 
       await invoke("restart_app");
     } catch (e) {
@@ -2403,8 +2417,10 @@ onMounted(() => {
   cargarConfig2FA();
 
   // 🛡️ VERIFICAR SI VENIMOS DE UN RESCATE EXITOSO
-  if (localStorage.getItem("db_recovery_flag") === "true") {
+  const flag = localStorage.getItem("db_recovery_flag");
+  if (flag) {
     localStorage.removeItem("db_recovery_flag");
+    recoveryType.value = flag === "local" ? "local" : "clean";
     showRecoverySuccessModal.value = true;
   }
 });
@@ -4464,8 +4480,12 @@ const reabrirMain = async () => {
     <div v-if="showRecoverySuccessModal" class="modal-overlay">
       <div class="modal-content premium-dialog animate-scale-in">
         <div class="modal-header-premium">
-          <div class="modal-icon-wrapper green">
+          <div
+            class="modal-icon-wrapper"
+            :class="recoveryType === 'local' ? 'green' : 'orange'"
+          >
             <svg
+              v-if="recoveryType === 'local'"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
@@ -4473,32 +4493,67 @@ const reabrirMain = async () => {
             >
               <polyline points="20 6 9 17 4 12"></polyline>
             </svg>
+            <svg
+              v-else
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.5"
+            >
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="12" y1="8" x2="12" y2="12"></line>
+              <line x1="12" y1="16" x2="12.01" y2="16"></line>
+            </svg>
           </div>
-          <h3>Reparación Exitosa</h3>
+          <h3>{{ recoveryType === 'local' ? 'Reparación Exitosa' : 'Sistema Aislado' }}</h3>
         </div>
 
         <div class="modal-body">
-          <p class="text-center">
-            El archivo de base de datos dañado ha sido aislado correctamente.<br />
-            <strong style="color: #166534"
-              >La aplicación ha iniciado con una base de datos limpia.</strong
-            >
-          </p>
-          <div
-            class="info-notice-box"
-            style="
-              margin-top: 15px;
-              background: #f0fdf4;
-              border: 1px solid #bbf7d0;
-              padding: 15px;
-              border-radius: 16px;
-            "
-          >
-            <p style="margin: 0; color: #166534; font-size: 14px; line-height: 1.5">
-              <b>Siguiente paso recomendado:</b><br />
-              Vincula tu cuenta de Google Drive y restaura tu última copia de
-              seguridad para recuperar tus registros.
+          <div v-if="recoveryType === 'local'">
+            <p class="text-center">
+              ¡Buenas noticias! Hemos recuperado tu sistema utilizando tu
+              <strong>respaldo local automático</strong>.
             </p>
+            <div
+              class="info-notice-box"
+              style="
+                margin-top: 15px;
+                background: #f0fdf4;
+                border: 1px solid #bbf7d0;
+                padding: 15px;
+                border-radius: 16px;
+              "
+            >
+              <p
+                style="margin: 0; color: #166534; font-size: 14px; line-height: 1.5"
+              >
+                Tus datos están intactos y al día. Puedes continuar trabajando de
+                inmediato.
+              </p>
+            </div>
+          </div>
+          <div v-else>
+            <p class="text-center">
+              El archivo dañado ha sido aislado, pero
+              <strong>no se encontró un respaldo local saludable</strong>.
+            </p>
+            <div
+              class="info-notice-box"
+              style="
+                margin-top: 15px;
+                background: #fffbeb;
+                border: 1px solid #fef3c7;
+                padding: 15px;
+                border-radius: 16px;
+              "
+            >
+              <p
+                style="margin: 0; color: #92400e; font-size: 14px; line-height: 1.5"
+              >
+                <b>Siguiente paso:</b> La aplicación se ha iniciado en blanco.
+                Ve a Sincronización para restaurar tu última copia de la nube.
+              </p>
+            </div>
           </div>
         </div>
 
@@ -4508,7 +4563,7 @@ const reabrirMain = async () => {
             style="width: 100%; height: 50px; font-size: 16px"
             @click="cerrarRecoverySuccessModal"
           >
-            Ir a Sincronización Ahora
+            {{ recoveryType === 'local' ? 'Excelente, Continuar' : 'Ir a Sincronización Ahora' }}
           </button>
         </div>
       </div>

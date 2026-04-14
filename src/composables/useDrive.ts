@@ -43,6 +43,7 @@ let deferredTimer: any = null;
 export const isDirty = ref(false);
 export const syncError = ref<string | null>(null);
 export const isOnline = ref(window.navigator.onLine);
+export const isDatabaseCorrupted = ref(false);
 
 if (typeof window !== "undefined") {
   const checkStatus = async () => {
@@ -481,6 +482,28 @@ export function useDrive() {
         throw new Error("Sin conexión a internet");
       }
 
+      // 🛡️ VALLA DE SEGURIDAD: Control de Integridad antes de subir
+      console.log("🔍 [Drive] Validando integridad de la base de datos antes de subir...");
+      try {
+        const { default: Database } = await import("@tauri-apps/plugin-sql");
+        const dbIntegrity = await Database.load("sqlite:pollos.db");
+        const check = await dbIntegrity.select<any[]>("PRAGMA integrity_check");
+        await dbIntegrity.close();
+
+        if (!check || check[0]["integrity_check"] !== "ok") {
+          isDatabaseCorrupted.value = true;
+          throw new Error(
+            "La base de datos local está dañada. Subida cancelada para proteger el respaldo de la nube.",
+          );
+        }
+        console.log("✅ [Drive] Integridad verificada. Procediendo con el backup.");
+      } catch (err: any) {
+        if (err.message?.includes("malformed")) {
+          isDatabaseCorrupted.value = true;
+        }
+        throw err;
+      }
+
       // 📂 Asegurar carpetas Raíz -> Año -> Mes
       const folderId = await ensureFolderHierarchy();
       if (!folderId) {
@@ -888,5 +911,6 @@ export function useDrive() {
     isDirty,
     syncError,
     isOnline,
+    isDatabaseCorrupted,
   };
 }

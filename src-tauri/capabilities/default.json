@@ -36,6 +36,10 @@
       "identifier": "fs:allow-remove",
       "allow": ["$APPDATA/**"]
     },
+    {
+      "identifier": "fs:allow-exists",
+      "allow": ["$APPDATA/**"]
+    },
     "shell:default",
     "opener:default",
     "http:default",
