@@ -1992,6 +1992,7 @@ const {
   cloudAccountState,
   fetchAccountState,
   saveAccountState,
+  resetLoading: resetLoadingDrive,
   hashString: hashStringDrive,
 } = useDrive();
 
@@ -3354,6 +3355,22 @@ const reabrirMain = async () => {
                   loadingDrive ? "Conectando..." : "Vincular Cuenta de Google"
                 }}
               </button>
+
+              <!-- Enlace de rescate para el usuario -->
+              <p
+                v-if="loadingDrive"
+                class="text-xs text-center animate-fade-in"
+                style="margin-top: 15px; color: #64748b"
+              >
+                ¿Cerraste la ventana por error?<br />
+                <a
+                  href="#"
+                  @click.prevent="resetLoadingDrive"
+                  style="color: #3b82f6; font-weight: 700; text-decoration: underline"
+                >
+                  Click aquí para cancelar
+                </a>
+              </p>
             </div>
 
             <div v-else class="sync-layout">

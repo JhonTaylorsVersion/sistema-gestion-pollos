@@ -156,17 +156,25 @@ export function useDrive() {
       const promptValue = force ? "select_account login" : "consent";
       const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${CLIENT_ID}&redirect_uri=${REDIRECT_URI}&response_type=code&scope=${SCOPES}&access_type=offline&prompt=${promptValue}`;
 
-      // 1. Iniciamos el servidor de escucha (sin esperar el await aún)
-      // Esto asegura que la app ya esté "escuchando" cuando el navegador se abra
+      // 1. Iniciamos el servidor de escucha
       const serverTask = invoke<string>("start_oauth_server", {
         authUrlBase: authUrl,
       });
 
-      // 2. Lanzar el navegador desde el frontend
+      // 2. Lanzar el navegador
       await openUrl(authUrl);
 
-      // 3. Ahora sí esperamos el código de autorización
-      const code = await serverTask;
+      // 🛡️ [MEJORA UX]: Timeout de seguridad por si el usuario cierra el navegador
+      let timeoutId: any;
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => {
+          reject(new Error("TIEMPO_EXCEDIDO"));
+        }, 120000); // 2 minutos máximo de espera
+      });
+
+      // 3. Esperar el código o el timeout
+      const code = await Promise.race([serverTask, timeoutPromise]);
+      clearTimeout(timeoutId);
 
       const response = await fetch("https://oauth2.googleapis.com/token", {
         method: "POST",
@@ -190,9 +198,13 @@ export function useDrive() {
       return false;
     } catch (error) {
       console.error("Login Error:", error);
+      const isTimeout = (error as Error).message === "TIEMPO_EXCEDIDO";
+      
       mostrarToast(
-        "Error al iniciar sesión con Google. Por favor, verifica tu conexión o intenta de nuevo.",
-        "error",
+        isTimeout 
+          ? "El tiempo de espera para iniciar sesión ha expirado. Por favor, intenta de nuevo."
+          : "Error al iniciar sesión con Google. Por favor, verifica tu conexión o intenta de nuevo.",
+        isTimeout ? "info" : "error",
       );
       return false;
     } finally {
@@ -849,6 +861,7 @@ export function useDrive() {
     cloudAccountState,
     fetchAccountState,
     saveAccountState,
+    resetLoading: () => (loading.value = false),
     hashString,
 
     isDirty,
