@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onUnmounted, nextTick, watch, watchEffect } from "vue";
+import { ref, onMounted, onUnmounted, nextTick, watch, watchEffect, computed } from "vue";
 import { useSheets } from "./composables/useSheets";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import SyncIcon from "./components/SyncIcon.vue";
@@ -205,6 +205,23 @@ const {
   syncError,
   abrirConfirmacion,
 } = useSheets();
+
+const syncStatus = computed(() => {
+  if (isCloudLoading.value) return "loading";
+  if (!isOnline.value) return "offline";
+  if (!isCloudAuth.value) return "not-linked";
+  if (syncError.value) return "error";
+  return "connected";
+});
+
+const syncTooltip = computed(() => {
+  if (isCloudLoading.value) return "Sincronizando con Google Drive...";
+  if (!isOnline.value) return "Sin conexión a Internet";
+  if (!isCloudAuth.value) return "Google Drive no vinculado";
+  if (syncError.value) return `Error de sincronización: ${syncError.value}`;
+  return "Sincronizado con Google Drive";
+});
+
 
 onMounted(async () => {
   setTableWrapperRef(tableWrapperRef);
