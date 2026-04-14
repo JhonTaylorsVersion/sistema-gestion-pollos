@@ -247,6 +247,8 @@ const modalSeguridadTitulo = computed(() => {
     return "Seguridad: Autorizar Cambio";
   if (verifyTargetFileId.value === "SIGNOUT_DRIVE_ACTION")
     return "Seguridad: Cerrar Sesión";
+  if (verifyTargetFileId.value === "LOGIN_IDENTITY_UNLOCK")
+    return "Validación de Identidad";
   return "Verificación de Seguridad";
 });
 
@@ -257,7 +259,18 @@ const modalSeguridadMensaje = computed(() => {
     return "Para vincular un nuevo celular, ingresa el código actual de tu Authenticator o un código de recuperación.";
   if (verifyTargetFileId.value === "SIGNOUT_DRIVE_ACTION")
     return "Para desvincular tu cuenta de Google Drive de este equipo, ingresa el código de tu Authenticator.";
+  if (verifyTargetFileId.value === "LOGIN_IDENTITY_UNLOCK")
+    return "Se ha detectado una identidad previa en la nube. Por seguridad, ingresa el código de tu Authenticator para desbloquear tu acceso en este equipo.";
   return "Estás intentando eliminar una copia de seguridad permanentemente. Ingresa el código de 6 dígitos de tu Authenticator o un código de recuperación para continuar.";
+});
+
+const modalSeguridadBotonLabel = computed(() => {
+  if (verificando2FA.value) return "Verificando...";
+  if (verifyTargetFileId.value === "RESET_2FA_ACTION") return "Autorizar";
+  if (verifyTargetFileId.value === "SIGNOUT_DRIVE_ACTION") return "Desvincular";
+  if (verifyTargetFileId.value === "LOGIN_IDENTITY_UNLOCK")
+    return "Confirmar Identidad";
+  return "Confirmar Borrado";
 });
 
 const cargarConfig2FA = async () => {
@@ -1995,18 +2008,21 @@ const requiereSeguridadUrgente = computed(() => {
 });
 
 // Auto-redirigir a la solución si hay inconsistencia
-watch(requiereSeguridadUrgente, (newVal) => {
-  if (newVal) {
-    seccionActiva.value = "sincronizacion";
-    subSeccionSync.value = "seguridad";
-    
-    // Si no estamos ya verificando identidad, abrimos el setup automáticamente
-    if (!show2FAVerifyModal.value && !show2FASetupModal.value) {
-      console.log("🛡️ Iniciando configuración 2FA obligatoria por integridad de cuenta.");
-      iniciar2FASetup();
+watch(
+  requiereSeguridadUrgente,
+  (newVal) => {
+    if (newVal) {
+      seccionActiva.value = "sincronizacion";
+      subSeccionSync.value = "seguridad";
+
+      // Si no estamos ya verificando identidad, abrimos el setup automáticamente
+      if (!show2FAVerifyModal.value && !show2FASetupModal.value) {
+        iniciar2FASetup();
+      }
     }
-  }
-}, { immediate: true });
+  },
+  { immediate: true },
+);
 
 const syncStatus = computed(() => {
   if (!authenticatedDrive.value) return "not-linked";
@@ -2058,7 +2074,7 @@ const iniciarLoginConSeguridad = async () => {
       // 1. EL JUEZ: Consultamos la identidad oficial en Drive (AppDataFolder)
       const state = await fetchAccountState();
 
-      if (state?.twoFactor?.confirmed) {
+      if (state?.twoFactor?.confirmed && !is2FAConfirmed.value) {
         // CASO B: Reinstalación/Equipo Nuevo - Identidad Confirmada detectada
         mostrarToast(
           "Identidad detectada. Ingresa tu código de seguridad para continuar.",
@@ -4081,11 +4097,11 @@ const reabrirMain = async () => {
           Cancelar
         </button>
         <button
-          class="btn-danger"
+          :class="verifyTargetFileId !== 'LOGIN_IDENTITY_UNLOCK' ? 'btn-danger' : 'btn-primary'"
           @click="procesarEliminacionCon2FA"
           :disabled="verificando2FA || input2FACode.length < 6"
         >
-          {{ verificando2FA ? "Verificando..." : "Confirmar Borrado" }}
+          {{ modalSeguridadBotonLabel }}
         </button>
       </div>
     </div>
