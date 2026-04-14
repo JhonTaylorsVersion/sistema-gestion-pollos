@@ -10,7 +10,7 @@ import Database from "@tauri-apps/plugin-sql";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeFile } from "@tauri-apps/plugin-fs";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { useDrive, isDirty } from "./useDrive";
+import { useDrive, isDirty, setConfirmHandler } from "./useDrive";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 const isInternalAction = ref(false);
@@ -113,38 +113,47 @@ export function useSheets() {
   });
 
 
+  let confirmResolve = null;
+
   const abrirConfirmacion = (
     titulo,
     texto,
-    onConfirm,
     textoConfirmar = "Aceptar",
     textoCancelar = "Cancelar",
     tipo = "normal",
     mostrarEstadoGuardado = false,
     icono = null,
   ) => {
-    modalConfirmacion.value = {
-      visible: true,
-      titulo,
-      texto,
-      onConfirm,
-      textoConfirmar,
-      textoCancelar,
-      tipo,
-      mostrarEstadoGuardado,
-      icono,
-    };
+    return new Promise((resolve) => {
+      confirmResolve = resolve;
+      modalConfirmacion.value = {
+        visible: true,
+        titulo,
+        texto,
+        onConfirm: () => {
+          if (confirmResolve) confirmResolve(true);
+          cerrarConfirmacion();
+        },
+        textoConfirmar,
+        textoCancelar,
+        tipo,
+        mostrarEstadoGuardado,
+        icono,
+      };
+    });
   };
-
 
   const confirmarAccion = () => {
     if (modalConfirmacion.value.onConfirm) {
       modalConfirmacion.value.onConfirm();
     }
-    cerrarConfirmacion();
   };
 
   const cerrarConfirmacion = () => {
+    if (confirmResolve) {
+      confirmResolve(false);
+      confirmResolve = null;
+    }
     modalConfirmacion.value = {
       visible: false,
       titulo: "",
@@ -157,6 +166,28 @@ export function useSheets() {
       icono: null,
     };
   };
+
+  onMounted(() => {
+    setConfirmHandler(async (msg, opts) => {
+      let titulo = "Confirmación";
+      let tipo = "normal";
+
+      if (typeof opts === "string") {
+        titulo = opts;
+      } else if (opts && typeof opts === "object") {
+        titulo = opts.title || titulo;
+        tipo = opts.kind === "warning" ? "warning" : "normal";
+      }
+
+      return await abrirConfirmacion(
+        titulo,
+        msg,
+        "Confirmar",
+        "Cancelar",
+        tipo,
+      );
+    });
+  });
 
 
   const modalExportacion = ref({

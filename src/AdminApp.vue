@@ -6,7 +6,7 @@ import ExcelJS from "exceljs";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import JSZip from "jszip";
-import { save, ask, open } from "@tauri-apps/plugin-dialog";
+import { save, open } from "@tauri-apps/plugin-dialog";
 import {
   writeFile,
   readFile,
@@ -17,7 +17,7 @@ import {
 
 import { revealItemInDir, openUrl } from "@tauri-apps/plugin-opener";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { useDrive } from "./composables/useDrive";
+import { useDrive, setConfirmHandler } from "./composables/useDrive";
 import { useNotify } from "./composables/useNotify";
 import SyncIcon from "./components/SyncIcon.vue";
 
@@ -273,12 +273,11 @@ const cerrarRecoverySuccessModal = () => {
 };
 
 const repararBaseDeDatos = async () => {
-  const confirmed = await ask(
+  const confirmed = await abrirConfirmacion(
+    "Reparación de Base de Datos",
     "Se ha detectado que la base de datos local está dañada (malformed). Esto puede ocurrir por un cierre inesperado.\n\nSe moverá el archivo dañado a una copia de seguridad y la app se reiniciará en blanco para que puedas restaurar tu copia de la nube.\n\n¿Deseas intentar la reparación automática?",
-    {
-      title: "Reparación de Base de Datos",
-      kind: "warning",
-    },
+    "Iniciar Reparación",
+    "warning",
   );
 
   if (confirmed) {
@@ -339,31 +338,35 @@ const { toast, toastY, draggingToast, mostrarToast, handleToastMouseDown } =
   useNotify();
 
 const modalSeguridadTitulo = computed(() => {
-  if (verifyTargetFileId.value === "RESET_2FA_ACTION")
-    return "Seguridad: Autorizar Cambio";
-  if (verifyTargetFileId.value === "SIGNOUT_DRIVE_ACTION")
-    return "Seguridad: Cerrar Sesión";
-  if (verifyTargetFileId.value === "LOGIN_IDENTITY_UNLOCK")
-    return "Validación de Identidad";
+  const v = verifyTargetFileId.value;
+  if (v === "RESET_2FA_ACTION") return "Seguridad: Autorizar Cambio";
+  if (v === "SIGNOUT_DRIVE_ACTION") return "Seguridad: Cerrar Sesión";
+  if (v === "LOGIN_IDENTITY_UNLOCK") return "Validación de Identidad";
+  if (v?.startsWith("RESTORE_")) return "Confirmar Restauración";
+  if (v?.startsWith("DELETE_")) return "Confirmar Eliminación";
   return "Verificación de Seguridad";
 });
 
 const modalSeguridadMensaje = computed(() => {
-  if (verifyTargetFileId.value === "RESET_2FA_ACTION")
+  const v = verifyTargetFileId.value;
+  if (v === "RESET_2FA_ACTION")
     return "Para vincular un nuevo celular, ingresa el código actual de tu Authenticator o un código de recuperación.";
-  if (verifyTargetFileId.value === "SIGNOUT_DRIVE_ACTION")
+  if (v === "SIGNOUT_DRIVE_ACTION")
     return "Para desvincular tu cuenta de Google Drive de este equipo, ingresa el código de tu Authenticator.";
-  if (verifyTargetFileId.value === "LOGIN_IDENTITY_UNLOCK")
+  if (v === "LOGIN_IDENTITY_UNLOCK")
     return "Se ha detectado una identidad previa en la nube. Por seguridad, ingresa el código de tu Authenticator para desbloquear tu acceso en este equipo.";
-  return "Estás intentando eliminar una copia de seguridad permanentemente. Ingresa el código de 6 dígitos de tu Authenticator o un código de recuperación para continuar.";
+  if (v?.startsWith("RESTORE_"))
+    return "<b>Atención:</b> Estás a punto de restaurar un respaldo. Se reemplazarán todos los datos locales actuales. Por favor, confirma tu identidad.";
+  return "Ingresa el código de 6 dígitos de tu Authenticator o un código de recuperación para continuar.";
 });
 
 const modalSeguridadBotonLabel = computed(() => {
   if (verificando2FA.value) return "Verificando...";
-  if (verifyTargetFileId.value === "RESET_2FA_ACTION") return "Autorizar";
-  if (verifyTargetFileId.value === "SIGNOUT_DRIVE_ACTION") return "Desvincular";
-  if (verifyTargetFileId.value === "LOGIN_IDENTITY_UNLOCK")
-    return "Confirmar Identidad";
+  const v = verifyTargetFileId.value;
+  if (v === "RESET_2FA_ACTION") return "Autorizar";
+  if (v === "SIGNOUT_DRIVE_ACTION") return "Desvincular";
+  if (v === "LOGIN_IDENTITY_UNLOCK") return "Confirmar Identidad";
+  if (v?.startsWith("RESTORE_")) return "Restaurar Ahora";
   return "Confirmar Borrado";
 });
 
@@ -427,12 +430,11 @@ const cargarConfig2FA = async () => {
 };
 
 const forzarResetMaestro = async () => {
-  const confirm = await ask(
+  const confirm = await abrirConfirmacion(
+    "RESET MAESTRO",
     "¿ESTÁS SEGURO? Esto eliminará la protección 2FA sin pedir código.",
-    {
-      title: "RESET MAESTRO",
-      kind: "warning",
-    },
+    "Eliminar Protección",
+    "danger",
   );
 
   if (confirm) {
@@ -1163,31 +1165,35 @@ const modalConfirmacion = ref({
   tipo: "normal",
 });
 
+let confirmResolve: ((val: boolean) => void) | null = null;
+
 const abrirConfirmacion = (
   titulo: string,
   texto: string,
-  onConfirm: Function,
   textoConfirmar = "Aceptar",
   tipo = "normal",
-) => {
-  modalConfirmacion.value = {
-    visible: true,
-    titulo,
-    texto,
-    onConfirm,
-    textoConfirmar,
-    tipo,
-  };
-};
-
-const confirmarAccion = () => {
-  if (modalConfirmacion.value.onConfirm) {
-    modalConfirmacion.value.onConfirm();
-  }
-  cerrarConfirmacion();
+): Promise<boolean> => {
+  return new Promise((resolve) => {
+    confirmResolve = resolve;
+    modalConfirmacion.value = {
+      visible: true,
+      titulo,
+      texto,
+      onConfirm: () => {
+        if (confirmResolve) confirmResolve(true);
+        cerrarConfirmacion();
+      },
+      textoConfirmar,
+      tipo,
+    };
+  });
 };
 
 const cerrarConfirmacion = () => {
+  if (confirmResolve) {
+    confirmResolve(false);
+    confirmResolve = null;
+  }
   modalConfirmacion.value = {
     visible: false,
     titulo: "",
@@ -1196,6 +1202,12 @@ const cerrarConfirmacion = () => {
     textoConfirmar: "Aceptar",
     tipo: "normal",
   };
+};
+
+const confirmarAccion = () => {
+  if (modalConfirmacion.value.onConfirm) {
+    modalConfirmacion.value.onConfirm();
+  }
 };
 
 // ==========================================
@@ -1933,20 +1945,20 @@ const exportarDatos = async (tipo: "pdf" | "excel" | "ambas") => {
     await writeFile(rutaDestino, dataToWrite);
 
     // AQUÍ ES DONDE LLAMAMOS A TU MODAL EXACTO
-    abrirConfirmacion(
+    const reveal = await abrirConfirmacion(
       "Exportación exitosa",
       `El archivo se guardó correctamente en:\n${rutaDestino}\n\n¿Deseas abrir la ubicación del archivo?`,
-      async () => {
-        try {
-          await revealItemInDir(rutaDestino);
-        } catch (err) {
-          console.error("Error al abrir la carpeta:", err);
-          mostrarToast("No se pudo abrir la ubicación del archivo.", "error");
-        }
-      },
       "Abrir ubicación",
       "success",
     );
+    if (reveal) {
+      try {
+        await revealItemInDir(rutaDestino);
+      } catch (err) {
+        console.error("Error al abrir la carpeta:", err);
+        mostrarToast("No se pudo abrir la ubicación del archivo.", "error");
+      }
+    }
   } catch (error) {
     console.error("Error al exportar:", error);
     exportando.value = false;
@@ -2138,42 +2150,14 @@ const requiereSeguridadUrgente = computed(() => {
   return result;
 });
 
-// Auto-redirigir a la solución si hay inconsistencia
-watch(
-  [requiereSeguridadUrgente, seccionActiva],
-  ([urgent, section]) => {
-    // 🛡️ Solo actuar si se requiere seguridad Y estamos en la pestaña de sincronización
-    if (urgent && section === "sincronizacion") {
-      subSeccionSync.value = "seguridad";
-
-      // 🛡️ DECISIÓN INTELIGENTE: ¿Es configuración nueva o recuperación?
-      const isRecovery = !!cloudAccountState.value?.twoFactor?.confirmed;
-
-      if (!show2FAVerifyModal.value && !show2FASetupModal.value) {
-        if (isRecovery) {
-          console.log(
-            "🔍 [Guardia] Detectada identidad en nube. Iniciando Verificación de Identidad.",
-          );
-          verifyTargetFileId.value = "LOGIN_IDENTITY_UNLOCK";
-          input2FACode.value = "";
-          llaveValidada.value = false;
-          show2FAVerifyModal.value = true;
-        } else {
-          console.log(
-            "🔍 [Guardia] Usuario nuevo detectado en Sincronización. Iniciando Configuración 2FA.",
-          );
-          iniciar2FASetup();
-        }
-      }
-    } else {
-      // 🛡️ Si salimos de la sección, cerramos los modales de seguridad para liberar la vista
-      show2FAVerifyModal.value = false;
-      show2FASetupModal.value = false;
-      showRecoveryModal.value = false;
-    }
-  },
-  { immediate: true },
-);
+watch(seccionActiva, () => {
+  // 🛡️ Al cambiar de pestaña, cerramos cualquier modal de seguridad abierto
+  // para evitar que se queden sobrepuestos en secciones no relacionadas.
+  show2FASetupModal.value = false;
+  show2FAVerifyModal.value = false;
+  showLogoutConfirmModal.value = false;
+  showMasterKeyUploadModal.value = false;
+});
 
 const syncStatus = computed(() => {
   if (!authenticatedDrive.value) return "not-linked";
@@ -2257,18 +2241,35 @@ const eliminandoBackup = ref(false);
 
 const confirmarEliminarBackup = async (fileId: string, _fileName: string) => {
   if (!is2FAEnabled.value) {
-    const setup = await ask(
+    const setup = await abrirConfirmacion(
+      "Seguridad Requerida",
       "Para eliminar copias de seguridad, primero debes activar la seguridad de Google Authenticator. ¿Deseas configurarlo ahora?",
-      {
-        title: "Seguridad Requerida",
-        kind: "warning",
-      },
+      "Configurar Ahora",
+      "normal",
     );
     if (setup) iniciar2FASetup();
     return;
   }
 
-  verifyTargetFileId.value = fileId;
+  verifyTargetFileId.value = `DELETE_${fileId}`;
+  input2FACode.value = "";
+  llaveValidada.value = false;
+  show2FAVerifyModal.value = true;
+};
+
+const confirmarRestaurarBackup = async (fileId: string) => {
+  if (!is2FAEnabled.value) {
+    const setup = await abrirConfirmacion(
+      "Seguridad Requerida",
+      "Para restaurar copias de seguridad, primero debes activar la seguridad de Google Authenticator. ¿Deseas configurarlo ahora?",
+      "Configurar Ahora",
+      "normal",
+    );
+    if (setup) iniciar2FASetup();
+    return;
+  }
+
+  verifyTargetFileId.value = `RESTORE_${fileId}`;
   input2FACode.value = "";
   llaveValidada.value = false;
   show2FAVerifyModal.value = true;
@@ -2463,13 +2464,13 @@ const procesarEliminacionCon2FA = async () => {
         return;
       }
 
-      // CASO: ELIMINACIÓN DE BACKUP
-      const fileId = verifyTargetFileId.value || "";
+      // CASO: RESPALDO (ELIMINACIÓN O RESTAURACIÓN)
+      const targetId = verifyTargetFileId.value || "";
       if (
-        !fileId ||
-        fileId === "LOGIN_IDENTITY_UNLOCK" ||
-        fileId === "SIGNOUT_DRIVE_ACTION" ||
-        fileId === "RESET_2FA_ACTION"
+        !targetId ||
+        targetId === "LOGIN_IDENTITY_UNLOCK" ||
+        targetId === "SIGNOUT_DRIVE_ACTION" ||
+        targetId === "RESET_2FA_ACTION"
       ) {
         return;
       }
@@ -2477,13 +2478,16 @@ const procesarEliminacionCon2FA = async () => {
       show2FAVerifyModal.value = false;
       verifyTargetFileId.value = null;
 
-      filaEliminandoId.value = fileId;
-      await deleteBackupDrive(fileId);
-
-      mostrarToast("La copia de seguridad ha sido eliminada con éxito.");
-
-      // Refrescar lista
-      listBackupsDrive();
+      if (targetId.startsWith("DELETE_")) {
+        const fileId = targetId.replace("DELETE_", "");
+        filaEliminandoId.value = fileId;
+        await deleteBackupDrive(fileId);
+        mostrarToast("La copia de seguridad ha sido eliminada con éxito.");
+        listBackupsDrive();
+      } else if (targetId.startsWith("RESTORE_")) {
+        const fileId = targetId.replace("RESTORE_", "");
+        await restoreBackupDrive(fileId);
+      }
     } else {
       mostrarToast(
         "El código ingresado es incorrecto. Por favor, verifica tu aplicación Authenticator.",
@@ -2502,7 +2506,22 @@ const procesarEliminacionCon2FA = async () => {
 
 let syncInterval: any = null;
 
-onMounted(() => {
+onMounted(async () => {
+  setConfirmHandler(async (msg, opts) => {
+    let titulo = "Confirmación";
+    let tipo = "normal";
+
+    if (typeof opts === "string") {
+      titulo = opts;
+    } else if (opts && typeof opts === "object") {
+      titulo = opts.title || titulo;
+      tipo = opts.kind === "warning" ? "warning" : "normal";
+    }
+
+    return await abrirConfirmacion(titulo, msg, "Confirmar", tipo);
+  });
+  await initDB();
+
   cargarConfig2FA();
 
   // 🛡️ VERIFICAR SI VENIMOS DE UN RESCATE EXITOSO
@@ -3743,8 +3762,8 @@ const reabrirMain = async () => {
                   </div>
                   <div class="warning-text">
                     <strong>Seguridad Desactivada:</strong> Por protección de
-                    tus datos, la función de <strong>borrar</strong> está
-                    bloqueada hasta que actives el Authenticator en la pestaña
+                    tus datos, <strong>algunas funciones</strong> estarán
+                    bloqueadas hasta que actives el Authenticator en la pestaña
                     de Seguridad.
                   </div>
                 </div>
@@ -3841,18 +3860,22 @@ const reabrirMain = async () => {
                           <div class="row-actions">
                             <button
                               class="btn-danger btn-sm"
-                              @click="restoreBackupDrive(file.id)"
+                              @click="confirmarRestaurarBackup(file.id)"
                               :disabled="
-                                loadingDrive ||
-                                eliminandoBackup ||
-                                !isOnlineDrive
+                                !!(
+                                  loadingDrive ||
+                                  eliminandoBackup ||
+                                  !isOnlineDrive
+                                )
                               "
                               :title="
                                 !isOnlineDrive
-                                  ? 'Se requiere conexión a internet para descargar la copia'
-                                  : loadingDrive
-                                    ? 'Espera a que termine la sincronización'
-                                    : 'Restaurar esta versión'
+                                  ? 'Se requiere conexión a internet'
+                                  : !is2FAEnabled
+                                    ? 'Haz clic para configurar seguridad y restaurar'
+                                    : loadingDrive
+                                      ? 'Espera a que termine la sincronización'
+                                      : 'Restaurar esta versión'
                               "
                             >
                               Restaurar
@@ -3863,7 +3886,7 @@ const reabrirMain = async () => {
                                 !isOnlineDrive
                                   ? 'No disponible sin conexión'
                                   : !is2FAEnabled
-                                    ? 'Debes activar la seguridad 2FA primero'
+                                    ? 'Haz clic para configurar seguridad y eliminar'
                                     : loadingDrive
                                       ? 'Sincronización en curso...'
                                       : filaEliminandoId === file.id
@@ -3874,17 +3897,15 @@ const reabrirMain = async () => {
                                 confirmarEliminarBackup(file.id, file.name)
                               "
                               :disabled="
-                                loadingDrive ||
-                                !isOnlineDrive ||
-                                (filaEliminandoId &&
-                                  filaEliminandoId !== file.id) ||
-                                !is2FAEnabled
+                                !!(
+                                  loadingDrive ||
+                                  !isOnlineDrive ||
+                                  (filaEliminandoId &&
+                                    filaEliminandoId !== file.id)
+                                )
                               "
                               :class="{
-                                disabled:
-                                  !is2FAEnabled ||
-                                  loadingDrive ||
-                                  !isOnlineDrive,
+                                disabled: loadingDrive || !isOnlineDrive,
                               }"
                             >
                               <div
@@ -4080,7 +4101,6 @@ const reabrirMain = async () => {
 
       <div class="modal-actions">
         <button
-          v-if="!requiereSeguridadUrgente"
           class="btn-secondary"
           @click="show2FASetupModal = false"
           :disabled="verificando2FA"
@@ -4372,7 +4392,6 @@ const reabrirMain = async () => {
 
       <div class="modal-actions">
         <button
-          v-if="!requiereSeguridadUrgente"
           class="btn-secondary"
           @click="show2FAVerifyModal = false"
           :disabled="verificando2FA"
@@ -5879,9 +5898,10 @@ const reabrirMain = async () => {
   justify-content: center;
   gap: 15px;
   z-index: 1000;
-  font-size: 13px;
+  font-size: 16px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
-  margin-bottom: 5px;
+  margin-bottom: 7px;
+  border-radius: 12px;
 }
 
 .integrity-icon {
@@ -6202,6 +6222,7 @@ const reabrirMain = async () => {
   padding: 15px;
   border-radius: 12px;
   margin-bottom: 20px;
+  margin-top: -30px;
 }
 
 .warning-icon {

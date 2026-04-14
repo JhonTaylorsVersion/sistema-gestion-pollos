@@ -5,7 +5,7 @@ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import SyncIcon from "./components/SyncIcon.vue";
 
 const isForceClosing = ref(false);
-import { ask } from "@tauri-apps/plugin-dialog";
+
 
 const handleConfigClick = async () => {
   // El panel ahora se abre inmediatamente. La sincronización puede ocurrir en segundo plano.
@@ -264,50 +264,50 @@ onMounted(async () => {
 
         if (!isOnline.value) {
           // CASO: SIN INTERNET (Sintetizado)
-          abrirConfirmacion(
+          const confirmed = await abrirConfirmacion(
             "Sin conexión a internet",
             "Datos guardados en PC.\n\nSincroniza luego abriendo la app con internet.\n\n¿Cerrar de todos modos?",
-            async () => {
-              isForceClosing.value = true;
-              isDirty.value = false;
-              await appWindow.close();
-            },
             "Cerrar de todos modos",
             "Esperar conexión",
             "danger",
             false,
             "offline",
           );
+          if (confirmed) {
+            isForceClosing.value = true;
+            isDirty.value = false;
+            await appWindow.close();
+          }
         } else if (!isCloudAuth.value) {
           // CASO: SIN CUENTA VINCULADA
-          abrirConfirmacion(
+          const confirmed = await abrirConfirmacion(
             "Copia de seguridad inactiva",
             "No has vinculado ninguna cuenta de Google Drive.\n\nTus datos se guardarán localmente, pero no habrá respaldo en la nube.\n\n¿Deseas cerrar el programa de todos modos?",
-            async () => {
-              isForceClosing.value = true;
-              isDirty.value = false;
-              await appWindow.close();
-            },
             "Cerrar la aplicación",
             "Vincular cuenta ahora",
             "normal",
             false,
             "not-linked",
           );
+          if (confirmed) {
+            isForceClosing.value = true;
+            isDirty.value = false;
+            await appWindow.close();
+          }
         } else {
           // CASO: OTRO ERROR (Sistema/Drive)
-          abrirConfirmacion(
+          const confirmed = await abrirConfirmacion(
             "Fallo de Sincronización",
             "No se pudo sincronizar la copia de seguridad en la nube debido a un error del sistema.\n\nSus cambios están guardados localmente.\n\n¿Deseas cerrar el programa de todos modos?",
-            async () => {
-              isForceClosing.value = true;
-              isDirty.value = false;
-              await appWindow.close();
-            },
             "Cerrar de todos modos",
             "Reintentar luego",
             "danger",
           );
+          if (confirmed) {
+            isForceClosing.value = true;
+            isDirty.value = false;
+            await appWindow.close();
+          }
         }
       }
     }

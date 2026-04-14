@@ -7,6 +7,16 @@ import { readFile, writeFile } from "@tauri-apps/plugin-fs";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useNotify } from "./useNotify";
 
+export type ConfirmHandler = (
+  message: string,
+  options?: string | { title?: string; kind?: "error" | "info" | "warning" },
+) => Promise<boolean>;
+const currentConfirmHandler = ref<ConfirmHandler>(ask);
+
+export const setConfirmHandler = (handler: ConfirmHandler) => {
+  currentConfirmHandler.value = handler;
+};
+
 export interface GoogleUser {
   name: string;
   email: string;
@@ -668,7 +678,7 @@ export function useDrive() {
 
   const restoreBackup = async (fileId: string) => {
     try {
-      const confirmed = await ask(
+      const confirmed = await currentConfirmHandler.value(
         "¿Estás seguro? Se reemplazarán todos los datos actuales y la app se reiniciará.",
         {
           title: "Confirmar Restauración",
