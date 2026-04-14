@@ -7,7 +7,7 @@ import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import JSZip from "jszip";
 import { save, ask, open } from "@tauri-apps/plugin-dialog";
-import { writeFile, readFile, remove } from "@tauri-apps/plugin-fs";
+import { writeFile, readFile, remove, rename } from "@tauri-apps/plugin-fs";
 
 import { revealItemInDir, openUrl } from "@tauri-apps/plugin-opener";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -241,6 +241,48 @@ const showMasterKeyUploadModal = ref(false);
 const pendingMasterKeyBytes = ref<Uint8Array | null>(null);
 const subiendoLlaveADrive = ref(false);
 const showDeleteOldKeyConfirm = ref(false);
+const databaseMalformed = ref(false);
+const showRecoverySuccessModal = ref(false);
+
+const cerrarRecoverySuccessModal = () => {
+  showRecoverySuccessModal.value = false;
+  cambiarSeccion("sincronizacion");
+};
+
+const repararBaseDeDatos = async () => {
+  const confirmed = await ask(
+    "Se ha detectado que la base de datos local está dañada (malformed). Esto puede ocurrir por un cierre inesperado.\n\nSe moverá el archivo dañado a una copia de seguridad y la app se reiniciará en blanco para que puedas restaurar tu copia de la nube.\n\n¿Deseas intentar la reparación automática?",
+    {
+      title: "Reparación de Base de Datos",
+      kind: "warning",
+    },
+  );
+
+  if (confirmed) {
+    try {
+      // 🛡️ IMPORTANTE: Cerrar la conexión antes de renombrar para evitar bloqueos
+      if (db) {
+        await (db as any).close();
+        db = null;
+      }
+
+      const dbPath = await invoke<string>("get_db_path");
+      const backupPath = `${dbPath}.malformed_${Date.now()}`;
+      await rename(dbPath, backupPath);
+
+      // 🚩 GUARDAR FLAG PARA EL PRÓXIMO INICIO (EVITAR FALSOS POSITIVOS)
+      localStorage.setItem("db_recovery_flag", "true");
+
+      await invoke("restart_app");
+    } catch (e) {
+      console.error("Error en reparación:", e);
+      mostrarToast(
+        "No se pudo completar la reparación automática. El archivo podría estar bloqueado. Intenta cerrando la aplicación y borrando 'pollos.db' manualmente.",
+        "error",
+      );
+    }
+  }
+};
 
 const confirmarEliminarLlaveInutil = async () => {
   if (currentKeyPath.value) {
@@ -325,6 +367,7 @@ const cargarConfig2FA = async () => {
     systemId.value = sid;
   } catch (e) {
     console.error("Error al cargar config 2FA:", e);
+    if (String(e).includes("malformed")) databaseMalformed.value = true;
   }
 };
 
@@ -712,6 +755,7 @@ const cargarGalpones = async () => {
     galponesLista.value = rows || [];
   } catch (error) {
     console.error("❌ Error al cargar galpones:", error);
+    if (String(error).includes("malformed")) databaseMalformed.value = true;
     mostrarToast("No se pudieron cargar los galpones.", "error");
   } finally {
     cargandoGalpones.value = false;
@@ -740,6 +784,7 @@ const cargarConjuntos = async () => {
     conjuntosLista.value = rows || [];
   } catch (error) {
     console.error("❌ Error al cargar conjuntos:", error);
+    if (String(error).includes("malformed")) databaseMalformed.value = true;
     mostrarToast("No se pudieron cargar los conjuntos.", "error");
   } finally {
     cargandoConjuntos.value = false;
@@ -2357,6 +2402,12 @@ let syncInterval: any = null;
 
 onMounted(() => {
   cargarConfig2FA();
+
+  // 🛡️ VERIFICAR SI VENIMOS DE UN RESCATE EXITOSO
+  if (localStorage.getItem("db_recovery_flag") === "true") {
+    localStorage.removeItem("db_recovery_flag");
+    showRecoverySuccessModal.value = true;
+  }
 });
 
 watch(seccionActiva, (newVal) => {
@@ -3324,6 +3375,68 @@ const reabrirMain = async () => {
           </div>
 
           <div class="sync-container">
+            <!-- --- ALERTA DE REPARACIÓN DE EMERGENCIA --- -->
+            <div
+              v-if="databaseMalformed"
+              class="sync-card malformed-alert animate-bounce-subtle"
+              style="
+                border: 2px solid #ef4444;
+                background: #fef2f2;
+                margin-bottom: 25px;
+                padding: 20px;
+                display: flex;
+                flex-direction: column;
+                gap: 12px;
+              "
+            >
+              <div
+                class="header-with-icon"
+                style="
+                  color: #b91c1c;
+                  display: flex;
+                  align-items: center;
+                  gap: 10px;
+                "
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2.5"
+                  style="width: 28px; height: 28px"
+                >
+                  <path
+                    d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"
+                  />
+                  <line x1="12" y1="9" x2="12" y2="13" />
+                  <line x1="12" y1="17" x2="12.01" y2="17" />
+                </svg>
+                <h3 style="margin: 0; font-weight: 800; font-size: 18px">
+                  Error Crítico de Archivo Detectado
+                </h3>
+              </div>
+              <p style="color: #7f1d1d; margin: 0; line-height: 1.5; font-size: 14.5px">
+                Se ha detectado que el archivo local de datos está dañado
+                (<b>malformed disk image</b>). Esto impide cargar tus registros y configuración
+                de seguridad local.
+              </p>
+              <button
+                class="btn-danger"
+                style="
+                  width: 100%;
+                  border-radius: 12px;
+                  padding: 12px;
+                  font-weight: 700;
+                  display: flex;
+                  align-items: center;
+                  justify-content: center;
+                  gap: 8px;
+                "
+                @click="repararBaseDeDatos"
+              >
+                Ejecutar Reparación de Emergencia
+              </button>
+            </div>
             <div v-if="!authenticatedDrive" class="sync-card empty">
               <div class="sync-icon-circle">
                 <SyncIcon status="not-linked" :size="44" />
@@ -4341,6 +4454,62 @@ const reabrirMain = async () => {
           >
             <span v-if="subiendoLlaveADrive" class="mini-spinner"></span>
             {{ subiendoLlaveADrive ? "Subiendo..." : "Sí, subir a Drive" }}
+          </button>
+        </div>
+      </div>
+    </div>
+  </Transition>
+
+  <!-- MODAL: RECUPERACIÓN EXITOSA (POST-RESTART) -->
+  <Transition name="fade">
+    <div v-if="showRecoverySuccessModal" class="modal-overlay">
+      <div class="modal-content premium-dialog animate-scale-in">
+        <div class="modal-header-premium">
+          <div class="modal-icon-wrapper green">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="3"
+            >
+              <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+          </div>
+          <h3>Reparación Exitosa</h3>
+        </div>
+
+        <div class="modal-body">
+          <p class="text-center">
+            El archivo de base de datos dañado ha sido aislado correctamente.<br />
+            <strong style="color: #166534"
+              >La aplicación ha iniciado con una base de datos limpia.</strong
+            >
+          </p>
+          <div
+            class="info-notice-box"
+            style="
+              margin-top: 15px;
+              background: #f0fdf4;
+              border: 1px solid #bbf7d0;
+              padding: 15px;
+              border-radius: 16px;
+            "
+          >
+            <p style="margin: 0; color: #166534; font-size: 14px; line-height: 1.5">
+              <b>Siguiente paso recomendado:</b><br />
+              Vincula tu cuenta de Google Drive y restaura tu última copia de
+              seguridad para recuperar tus registros.
+            </p>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button
+            class="btn-primary"
+            style="width: 100%; height: 50px; font-size: 16px"
+            @click="cerrarRecoverySuccessModal"
+          >
+            Ir a Sincronización Ahora
           </button>
         </div>
       </div>

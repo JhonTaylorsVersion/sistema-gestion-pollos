@@ -22,11 +22,19 @@
     "fs:write-all",
     {
       "identifier": "fs:allow-read-file",
-      "allow": ["$APPDATA/pollos.db"]
+      "allow": ["$APPDATA/**"]
     },
     {
       "identifier": "fs:allow-write-file",
-      "allow": ["$APPDATA/pollos.db"]
+      "allow": ["$APPDATA/**"]
+    },
+    {
+      "identifier": "fs:allow-rename",
+      "allow": ["$APPDATA/**"]
+    },
+    {
+      "identifier": "fs:allow-remove",
+      "allow": ["$APPDATA/**"]
     },
     "shell:default",
     "opener:default",
