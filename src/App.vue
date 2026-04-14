@@ -265,6 +265,8 @@ onMounted(async () => {
             "Cerrar la aplicación",
             "Vincular cuenta ahora",
             "normal",
+            false,
+            "not-linked",
           );
         } else {
           // CASO: OTRO ERROR (Sistema/Drive)
@@ -405,23 +407,25 @@ onMounted(async () => {
                         : 'Sincronizado con Drive'
           "
         >
-          <!-- Estado: No autenticado -->
+          <!-- Estado: No autenticado (Google Drive No Vinculado) -->
           <svg
             v-if="!isCloudAuth"
             class="sync-icon-status disconnected"
             viewBox="0 0 24 24"
             fill="none"
-            stroke="#94a3b8"
-            stroke-width="2.5"
-            stroke-linecap="round"
-            stroke-linejoin="round"
           >
-            <path d="M17.58 19H14a2 2 0 1 1-2-2"></path>
-            <path d="m2 2 20 20"></path>
-            <path
-              d="M10.34 4.46a4 4 0 0 1 7.27 2M21 15a4 4 0 0 0-3-3.87"
-            ></path>
-            <path d="M5 15a4 4 0 0 1 5.31-3.75"></path>
+            <!-- Logo de Google Drive simplificado -->
+            <path 
+              d="M12.01 1.485c-2.082 0-3.754.02-3.743.047.01.02 1.708 3.001 3.774 6.62l3.76 6.574h3.76c2.081 0 3.753-.02 3.742-.047-.005-.02-1.708-3.001-3.775-6.62l-3.76-6.574zm-4.76 1.73a789.828 789.861 0 0 0-3.63 6.319L0 15.868l1.89 3.298 1.885 3.297 3.62-6.335 3.618-6.33-1.88-3.287C8.1 4.704 7.255 3.22 7.25 3.214zm2.259 12.653-.203.348c-.114.198-.96 1.672-1.88 3.287a423.93 423.948 0 0 1-1.698 2.97c-.01.026 3.24.042 7.222.042h7.244l1.796-3.157c.992-1.734 1.85-3.23 1.906-3.323l.104-.167h-7.249z" 
+              fill="#94a3b8"
+            />
+            <!-- Slash de desconexión -->
+            <line 
+              x1="2" y1="2" x2="22" y2="22" 
+              stroke="#64748b" 
+              stroke-width="2.5" 
+              stroke-linecap="round"
+            />
           </svg>
           <!-- Estado: Sin Internet o Error de Red (Cloud Offline) -->
           <svg
@@ -1867,6 +1871,33 @@ onMounted(async () => {
             d="M22.61 16.95A5 5 0 0 0 18 10h-1.26a8 8 0 0 0-7.05-6M5 5a8 8 0 0 0 4 15h9a5 5 0 0 0 1.7-.3"
           ></path>
           <line x1="1" y1="1" x2="23" y2="23"></line>
+        </svg>
+      </div>
+
+      <!-- ICONO DE DRIVE NO VINCULADO (NUEVO) -->
+      <div
+        v-if="modalConfirmacion.icono === 'not-linked'"
+        style="display: flex; justify-content: center; margin: 15px 0"
+      >
+        <svg
+          style="width: 64px; height: 64px"
+          viewBox="0 0 24 24"
+          fill="none"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="M12.01 1.485c-2.082 0-3.754.02-3.743.047.01.02 1.708 3.001 3.774 6.62l3.76 6.574h3.76c2.081 0 3.753-.02 3.742-.047-.005-.02-1.708-3.001-3.775-6.62l-3.76-6.574zm-4.76 1.73a789.828 789.861 0 0 0-3.63 6.319L0 15.868l1.89 3.298 1.885 3.297 3.62-6.335 3.618-6.33-1.88-3.287C8.1 4.704 7.255 3.22 7.25 3.214zm2.259 12.653-.203.348c-.114.198-.96 1.672-1.88 3.287a423.93 423.948 0 0 1-1.698 2.97c-.01.026 3.24.042 7.222.042h7.244l1.796-3.157c.992-1.734 1.85-3.23 1.906-3.323l.104-.167h-7.249z"
+            fill="#94a3b8"
+          />
+          <line
+            x1="2"
+            y1="2"
+            x2="22"
+            y2="22"
+            stroke="#64748b"
+            stroke-width="2.5"
+            stroke-linecap="round"
+          />
         </svg>
       </div>
 
