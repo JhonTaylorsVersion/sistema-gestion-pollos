@@ -3,7 +3,7 @@ import { ref, onMounted, computed } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { fetch } from "@tauri-apps/plugin-http";
-import { readFile, writeFile } from "@tauri-apps/plugin-fs";
+import { readFile, writeFile, remove, exists } from "@tauri-apps/plugin-fs";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useNotify } from "./useNotify";
 
@@ -718,16 +718,23 @@ export function useDrive() {
 
       const dbPath = await invoke<string>("get_db_path");
 
-      // 🛡️ CREAR BACKUP LOCAL DE EMERGENCIA ANTES DE REEMPLAZAR
+      // 🛡️ REFUERZO DE VALLA: Limpiar rastro de archivos auxiliares antes de restaurar
+      // Si no borramos el -wal y -shm, la nueva base de datos intentará usarlos y se marcará como "malformed"
       try {
-        const currentDB = await readFile(dbPath);
-        await writeFile(dbPath + ".bak", currentDB);
-        console.log(
-          "📦 Backup local de emergencia creado en:",
-          dbPath + ".bak",
-        );
+        if (await exists(dbPath + "-wal")) {
+          await remove(dbPath + "-wal");
+          console.log("🧹 Archivo WAL antiguo eliminado.");
+        }
+        if (await exists(dbPath + "-shm")) {
+          await remove(dbPath + "-shm");
+          console.log("🧹 Archivo SHM antiguo eliminado.");
+        }
+        if (await exists(dbPath + "-journal")) {
+          await remove(dbPath + "-journal");
+          console.log("🧹 Archivo JOURNAL antiguo eliminado.");
+        }
       } catch (e) {
-        console.warn("⚠️ No se pudo crear backup temporal de seguridad:", e);
+        console.warn("⚠️ No se pudieron limpiar algunos archivos auxiliares (posiblemente bloqueados):", e);
       }
 
       await writeFile(dbPath, new Uint8Array(content));

@@ -12,6 +12,7 @@ import { writeFile } from "@tauri-apps/plugin-fs";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useDrive, isDirty, setConfirmHandler } from "./useDrive";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { emit, listen } from "@tauri-apps/api/event";
 
 const isInternalAction = ref(false);
 let db = null;
@@ -29,55 +30,70 @@ export function useSheets() {
 
 
   const initDB = async () => {
-    // Database.load es inteligente y devuelve el mismo pool si ya está cargado.
-    // Al llamarlo siempre, nos aseguramos de que si el pool se cerró por algún motivo, se vuelva a abrir.
-    db = await Database.load("sqlite:pollos.db");
+    try {
+      if (!db) {
+        console.log("📂 [useSheets] Iniciando conexión SQLite...");
+        db = await Database.load("sqlite:pollos.db");
+      }
+    } catch (e) {
+      const errorStr = String(e).toLowerCase();
+      console.error("🚨 [useSheets] Error en initDB:", e);
+      if (errorStr.includes("malformed") || errorStr.includes("code 11")) {
+        console.error("🧨 BASE DE DATOS CORRUPTA DETECTADA EN VENTANA PRINCIPAL");
+        emit("db-corruption-detected", { error: errorStr });
+      }
+      throw e;
+    }
 
     if (tablesInitialized) return db;
 
+    // Garantizar que TODAS las tablas de negocio existan
     await db.execute(`
-  CREATE TABLE IF NOT EXISTS conjuntos (
-    id TEXT PRIMARY KEY,
-    nombre TEXT NOT NULL,
-    descripcion TEXT
-  )
-`);
+      CREATE TABLE IF NOT EXISTS conjuntos (
+        id TEXT PRIMARY KEY,
+        nombre TEXT NOT NULL,
+        descripcion TEXT
+      )
+    `);
 
     await db.execute(`
-  CREATE TABLE IF NOT EXISTS sheets (
-    id TEXT PRIMARY KEY,
-    conjunto_id TEXT NOT NULL,
-    nombre TEXT NOT NULL,
-    granja TEXT,
-    lote TEXT,
-    galpon TEXT,
-    fecha_ingreso TEXT,
-    procedencia TEXT,
-    cantidad INTEGER,
-    FOREIGN KEY (conjunto_id) REFERENCES conjuntos(id)
-  )
-`);
+      CREATE TABLE IF NOT EXISTS sheets (
+        id TEXT PRIMARY KEY,
+        conjunto_id TEXT NOT NULL,
+        nombre TEXT NOT NULL,
+        granja TEXT,
+        lote TEXT,
+        galpon TEXT,
+        fecha_ingreso TEXT,
+        procedencia TEXT,
+        cantidad INTEGER,
+        FOREIGN KEY (conjunto_id) REFERENCES conjuntos(id)
+      )
+    `);
 
     await db.execute(`
-    CREATE TABLE IF NOT EXISTS filas (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      sheet_id TEXT NOT NULL,
-      dia INTEGER NOT NULL,
-      semana INTEGER NOT NULL,
-      fecha TEXT,
-      alimento_cant TEXT,
-      alimento_diario REAL,
-      alimento_acum REAL,
-      medicina TEXT,
-      gas_diario REAL,
-      gas_acum REAL,
-      mort_diaria REAL,
-      mort_acum REAL,
-      mort_porcentaje REAL,
-      observacion TEXT,
-      FOREIGN KEY (sheet_id) REFERENCES sheets(id)
-    )
-  `);
+      CREATE TABLE IF NOT EXISTS filas (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sheet_id TEXT NOT NULL,
+        dia INTEGER NOT NULL,
+        semana INTEGER NOT NULL,
+        fecha TEXT,
+        alimento_cant TEXT,
+        alimento_diario REAL,
+        alimento_acum REAL,
+        medicina TEXT,
+        gas_diario REAL,
+        gas_acum REAL,
+        mort_diaria REAL,
+        mort_acum REAL,
+        mort_porcentaje REAL,
+        observacion TEXT,
+        FOREIGN KEY (sheet_id) REFERENCES sheets(id)
+      )
+    `);
+
+    // También creamos app_config aquí por si acaso se inicia desde la ventana principal
+    await db.execute(`CREATE TABLE IF NOT EXISTS app_config (key TEXT PRIMARY KEY, value TEXT)`);
 
     tablesInitialized = true;
     return db;
@@ -2917,7 +2933,13 @@ export function useSheets() {
         }
       }, 4000);
     } catch (error) {
-      console.error("Error al guardar en SQLite:", error);
+      const errorStr = String(error).toLowerCase();
+      console.error("🚨 [useSheets] Error al guardar en SQLite:", error);
+
+      if (errorStr.includes("malformed") || errorStr.includes("code 11")) {
+        console.error("🧨 CRÍTICO: El guardado falló por base de datos corrupta (Malformed).");
+        emit("db-corruption-detected", { source: "autosave", error: errorStr });
+      }
 
       // Actualizamos el estado de error
       estadoGuardado.value = {

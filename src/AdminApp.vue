@@ -17,6 +17,7 @@ import {
 
 import { revealItemInDir, openUrl } from "@tauri-apps/plugin-opener";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { listen } from "@tauri-apps/api/event";
 import { useDrive, setConfirmHandler } from "./composables/useDrive";
 import { useNotify } from "./composables/useNotify";
 import SyncIcon from "./components/SyncIcon.vue";
@@ -199,13 +200,65 @@ const initDB = async (): Promise<Database> => {
   dbPromise = (async () => {
     try {
       const connection = await Database.load("sqlite:pollos.db");
-      await connection.execute(
-        `CREATE TABLE IF NOT EXISTS app_config (key TEXT PRIMARY KEY, value TEXT)`,
-      );
+      
+      // Asegurar que TODAS las tablas existan
+      await connection.execute(`CREATE TABLE IF NOT EXISTS app_config (key TEXT PRIMARY KEY, value TEXT)`);
+      
+      await connection.execute(`
+        CREATE TABLE IF NOT EXISTS conjuntos (
+          id TEXT PRIMARY KEY,
+          nombre TEXT NOT NULL,
+          descripcion TEXT
+        )
+      `);
+
+      await connection.execute(`
+        CREATE TABLE IF NOT EXISTS sheets (
+          id TEXT PRIMARY KEY,
+          conjunto_id TEXT NOT NULL,
+          nombre TEXT NOT NULL,
+          granja TEXT,
+          lote TEXT,
+          galpon TEXT,
+          fecha_ingreso TEXT,
+          procedencia TEXT,
+          cantidad INTEGER,
+          FOREIGN KEY (conjunto_id) REFERENCES conjuntos(id)
+        )
+      `);
+
+      await connection.execute(`
+        CREATE TABLE IF NOT EXISTS filas (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          sheet_id TEXT NOT NULL,
+          dia INTEGER NOT NULL,
+          semana INTEGER NOT NULL,
+          fecha TEXT,
+          alimento_cant TEXT,
+          alimento_diario REAL,
+          alimento_acum REAL,
+          medicina TEXT,
+          gas_diario REAL,
+          gas_acum REAL,
+          mort_diaria REAL,
+          mort_acum REAL,
+          mort_porcentaje REAL,
+          observacion TEXT,
+          FOREIGN KEY (sheet_id) REFERENCES sheets(id)
+        )
+      `);
+
       db = connection;
       return db;
     } catch (e) {
-      dbPromise = null; // Resetear para permitir reintento si falla
+      dbPromise = null;
+      const errorStr = String(e).toLowerCase();
+      console.error("🚨 [initDB ADMIN] Error crítico detectado:", e);
+      
+      if (errorStr.includes("malformed") || errorStr.includes("code 11")) {
+        console.warn("🛡️ [VALLA] ¡Corrupción detectada en initDB! databaseMalformed = true");
+        databaseMalformed.value = true;
+      }
       throw e;
     }
   })();
@@ -311,9 +364,18 @@ const repararBaseDeDatos = async () => {
       const backupPath = `${dbPath}.malformed_${Date.now()}`;
       const bakPath = `${dbPath}.bak`;
 
-      // 1. Aislar el archivo dañado
+      // 1. Aislar el archivo dañado y sus rastros
       await rename(dbPath, backupPath);
 
+      // 🧹 LIMPIEZA DE VALLA: Eliminar archivos temporales del malformed para evitar contaminar el reinicio
+      try {
+        if (await exists(dbPath + "-wal")) await remove(dbPath + "-wal");
+        if (await exists(dbPath + "-shm")) await remove(dbPath + "-shm");
+        if (await exists(dbPath + "-journal")) await remove(dbPath + "-journal");
+        console.log("🧹 Rastro de archivos temporales corruptos eliminado.");
+      } catch (e) {
+        console.warn("⚠️ No se pudieron limpiar temporales en reparación:", e);
+      }
       // 2. Intentar Recuperación Local (Plan A)
       const hasBak = await exists(bakPath);
       if (hasBak) {
@@ -443,8 +505,13 @@ const cargarConfig2FA = async () => {
     systemId.value = sid;
     isConfigLoaded.value = true; // 🏁 Marcamos como cargado
   } catch (e) {
-    console.error("Error al cargar config 2FA:", e);
-    if (String(e).includes("malformed")) databaseMalformed.value = true;
+    const errorStr = String(e).toLowerCase();
+    console.error("🚨 [Config2FA] Error al cargar configuración técnica:", e);
+    
+    if (errorStr.includes("malformed") || errorStr.includes("code 11")) {
+      console.warn("🛡️ [VALLA] Corrupción detectada en Config2FA. Activando banner de reparación.");
+      databaseMalformed.value = true;
+    }
   }
 };
 
@@ -804,6 +871,22 @@ const cambiarSeccion = async (seccion: SeccionActiva) => {
 
   if (seccion === "conjuntos" && conjuntosLista.value.length === 0) {
     await cargarConjuntos();
+  }
+
+  if (seccion === "sincronizacion") {
+    // 🔎 SABUESO AGRESIVO AL ENTRAR
+    try {
+      const database = await initDB();
+      // Forzamos lectura de las tablas "pesadas" que son las que se dañan
+      await database.execute("SELECT count(*) FROM sheets");
+      console.log("🔍 [Sabueso Agresivo] Verificando tablas de registros...");
+    } catch (e) {
+      const errorStr = String(e).toLowerCase();
+      if (errorStr.includes("malformed") || errorStr.includes("code 11")) {
+        console.error("🧨 [Sabueso Agresivo] Corrupción detectada en tablas de datos.");
+        databaseMalformed.value = true;
+      }
+    }
   }
 };
 
@@ -2187,21 +2270,27 @@ watch(seccionActiva, () => {
 });
 
 const syncStatus = computed(() => {
-  if (!authenticatedDrive.value) return "not-linked";
-  if (
-    !isOnlineDrive.value ||
-    (syncErrorDrive.value &&
-      (syncErrorDrive.value.includes("request for url") ||
-        syncErrorDrive.value.includes("timeout") ||
-        syncErrorDrive.value.includes("network") ||
-        syncErrorDrive.value.includes("offline")))
-  ) {
-    return "offline";
-  }
-  if (loadingDrive.value) return "loading";
-  if (syncErrorDrive.value) return "error";
-  if (isDirtyDrive.value) return "pending";
-  return "success";
+  const status = (() => {
+    if (!authenticatedDrive.value) return "not-linked";
+    if (databaseMalformed.value) return "error"; // 🛡️ Prioridad: Si hay malformed, es un error crítico
+    if (
+      !isOnlineDrive.value ||
+      (syncErrorDrive.value &&
+        (syncErrorDrive.value.includes("request for url") ||
+          syncErrorDrive.value.includes("timeout") ||
+          syncErrorDrive.value.includes("network") ||
+          syncErrorDrive.value.includes("offline")))
+    ) {
+      return "offline";
+    }
+    if (loadingDrive.value) return "loading";
+    if (syncErrorDrive.value) return "error";
+    if (isDirtyDrive.value) return "pending";
+    return "success";
+  })();
+
+  console.log(`📊 [SyncStatus] Calculado: ${status} | DB_Malformed: ${databaseMalformed.value} | Cloud_Error: ${syncErrorDrive.value}`);
+  return status;
 });
 
 const syncTooltip = computed(() => {
@@ -2534,6 +2623,13 @@ const procesarEliminacionCon2FA = async () => {
 let syncInterval: any = null;
 
 onMounted(async () => {
+  // 🛡️ ESCUCHA GLOBAL DE LA VALLA DE SEGURIDAD
+  // Si cualquier ventana (como la principal) detecta corrupción, el Admin debe enterarse
+  listen("db-corruption-detected", (event) => {
+    console.warn("🚨 [VALLA GLOBAL] Alerta de integridad recibida de otra ventana:", event.payload);
+    databaseMalformed.value = true;
+  });
+
   setConfirmHandler(async (msg, opts) => {
     let titulo = "Confirmación";
     let tipo = "normal";
@@ -2572,7 +2668,7 @@ watch(seccionActiva, (newVal) => {
     listBackupsDrive();
 
     // 2. Iniciar "Polling" cada 30 segundos (silencioso)
-    syncInterval = setInterval(() => {
+    syncInterval = setInterval(async () => {
       // SOLO refrescar si: estamos en la sección, estamos autenticados, NO estamos cargando y NO estamos eliminando
       if (
         seccionActiva.value === "sincronizacion" &&
@@ -2580,6 +2676,20 @@ watch(seccionActiva, (newVal) => {
         !loadingDrive.value &&
         !eliminandoBackup.value
       ) {
+        // 🔎 SABUESO AGRESIVO: Buscamos corrupción en las tablas de datos reales (que es donde suele fallar)
+        try {
+          const database = await initDB();
+          await database.execute("SELECT count(*) FROM sheets");
+          await database.execute("SELECT id FROM filas LIMIT 1");
+          console.log("🔍 [Sabueso] Integridad de tablas de datos OK.");
+        } catch (e) {
+          const errorStr = String(e).toLowerCase();
+          if (errorStr.includes("malformed") || errorStr.includes("code 11")) {
+            console.error("🧨 [Sabueso Agresivo] ¡TABLAS DE DATOS CORRUPTAS DETECTADAS!");
+            databaseMalformed.value = true;
+          }
+        }
+
         console.log("🔄 Auto-refresco de backups (silent)...");
         listBackupsDrive(true);
       }
@@ -2750,6 +2860,96 @@ const reabrirMain = async () => {
             >.
           </div>
         </div>
+
+        <!-- --- 🛡️ VALLA DE SEGURIDAD: BANNER DE ERROR CRÍTICO (VISIBLE EN CUALQUIER SECCIÓN) --- -->
+        <div
+          v-if="databaseMalformed"
+          class="sync-card malformed-alert animate-bounce-subtle"
+          style="
+            border: 3px solid #ef4444;
+            background: #fff1f2;
+            margin: 10px 20px 25px 20px;
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            box-shadow: 0 10px 30px rgba(239, 68, 68, 0.15);
+            border-radius: 20px;
+          "
+        >
+          <div
+            class="header-with-icon"
+            style="
+              color: #b91c1c;
+              display: flex;
+              align-items: center;
+              gap: 12px;
+            "
+          >
+            <div
+              style="
+                background: #ef4444;
+                color: white;
+                width: 40px;
+                height: 40px;
+                border-radius: 12px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+              "
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="3"
+                style="width: 24px; height: 24px"
+              >
+                <path
+                  d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"
+                />
+                <line x1="12" y1="9" x2="12" y2="13" />
+                <line x1="12" y1="17" x2="12.01" y2="17" />
+              </svg>
+            </div>
+            <h3 style="margin: 0; font-weight: 900; font-size: 20px">
+              Error de Integridad Detectado (Base de Datos Corrupta)
+            </h3>
+          </div>
+          <p
+            style="
+              color: #7f1d1d;
+              margin: 0;
+              line-height: 1.6;
+              font-size: 15px;
+              font-weight: 500;
+            "
+          >
+            Se ha detectado un fallo crítico (<b>malformed disk image</b>) que impide guardar o leer tus registros.
+            Para proteger tu información, es necesario ejecutar una reparación.
+          </p>
+          <button
+            class="btn-danger"
+            style="
+              width: 100%;
+              border-radius: 14px;
+              padding: 14px;
+              font-weight: 800;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              gap: 10px;
+              font-size: 16px;
+              cursor: pointer;
+              border: none;
+              transition: transform 0.2s;
+            "
+            @click="repararBaseDeDatos"
+          >
+            🚀 Ejecutar Reparación de Emergencia Ahora
+          </button>
+        </div>
+
         <template
           v-if="seccionActiva === 'busqueda' || seccionActiva === 'detalle'"
         >
@@ -3548,76 +3748,6 @@ const reabrirMain = async () => {
           </div>
 
           <div class="sync-container">
-            <!-- --- ALERTA DE REPARACIÓN DE EMERGENCIA --- -->
-            <div
-              v-if="databaseMalformed"
-              class="sync-card malformed-alert animate-bounce-subtle"
-              style="
-                border: 2px solid #ef4444;
-                background: #fef2f2;
-                margin-bottom: 25px;
-                padding: 20px;
-                display: flex;
-                flex-direction: column;
-                gap: 12px;
-              "
-            >
-              <div
-                class="header-with-icon"
-                style="
-                  color: #b91c1c;
-                  display: flex;
-                  align-items: center;
-                  gap: 10px;
-                "
-              >
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2.5"
-                  style="width: 28px; height: 28px"
-                >
-                  <path
-                    d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"
-                  />
-                  <line x1="12" y1="9" x2="12" y2="13" />
-                  <line x1="12" y1="17" x2="12.01" y2="17" />
-                </svg>
-                <h3 style="margin: 0; font-weight: 800; font-size: 18px">
-                  Error Crítico de Archivo Detectado
-                </h3>
-              </div>
-              <p
-                style="
-                  color: #7f1d1d;
-                  margin: 0;
-                  line-height: 1.5;
-                  font-size: 14.5px;
-                "
-              >
-                Se ha detectado que el archivo local de datos está dañado (<b
-                  >malformed disk image</b
-                >). Esto impide cargar tus registros y configuración de
-                seguridad local.
-              </p>
-              <button
-                class="btn-danger"
-                style="
-                  width: 100%;
-                  border-radius: 12px;
-                  padding: 12px;
-                  font-weight: 700;
-                  display: flex;
-                  align-items: center;
-                  justify-content: center;
-                  gap: 8px;
-                "
-                @click="repararBaseDeDatos"
-              >
-                Ejecutar Reparación de Emergencia
-              </button>
-            </div>
             <div v-if="!authenticatedDrive" class="sync-card empty">
               <div class="sync-icon-circle">
                 <SyncIcon status="not-linked" :size="44" />
