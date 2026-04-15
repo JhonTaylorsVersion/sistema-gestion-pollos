@@ -201,16 +201,16 @@ const initDB = async (): Promise<Database> => {
     try {
       const connection = await Database.load("sqlite:pollos.db");
       
-      // Asegurar que TODAS las tablas existan
-      await connection.execute(`CREATE TABLE IF NOT EXISTS app_config (key TEXT PRIMARY KEY, value TEXT)`);
-      
+      // 1. Tablas Base y Migraciones (Consistente con useSheets / NIVEL 3)
       await connection.execute(`
         CREATE TABLE IF NOT EXISTS conjuntos (
           id TEXT PRIMARY KEY,
           nombre TEXT NOT NULL,
-          descripcion TEXT
+          descripcion TEXT,
+          updated_at INTEGER DEFAULT (strftime('%s', 'now'))
         )
       `);
+      try { await connection.execute("ALTER TABLE conjuntos ADD COLUMN updated_at INTEGER DEFAULT (strftime('%s', 'now'))"); } catch(e) {}
 
       await connection.execute(`
         CREATE TABLE IF NOT EXISTS sheets (
@@ -223,13 +223,15 @@ const initDB = async (): Promise<Database> => {
           fecha_ingreso TEXT,
           procedencia TEXT,
           cantidad INTEGER,
+          updated_at INTEGER DEFAULT (strftime('%s', 'now')),
           FOREIGN KEY (conjunto_id) REFERENCES conjuntos(id)
         )
       `);
+      try { await connection.execute("ALTER TABLE sheets ADD COLUMN updated_at INTEGER DEFAULT (strftime('%s', 'now'))"); } catch(e) {}
 
       await connection.execute(`
         CREATE TABLE IF NOT EXISTS filas (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          id TEXT PRIMARY KEY, 
           sheet_id TEXT NOT NULL,
           dia INTEGER NOT NULL,
           semana INTEGER NOT NULL,
@@ -244,9 +246,60 @@ const initDB = async (): Promise<Database> => {
           mort_acum REAL,
           mort_porcentaje REAL,
           observacion TEXT,
+          updated_at INTEGER DEFAULT (strftime('%s', 'now')),
           FOREIGN KEY (sheet_id) REFERENCES sheets(id)
         )
       `);
+      try { await connection.execute("ALTER TABLE filas ADD COLUMN updated_at INTEGER DEFAULT (strftime('%s', 'now'))"); } catch(e) {}
+
+      // 2. Infraestructura de Sincronización (Nivel 3)
+      await connection.execute(`
+        CREATE TABLE IF NOT EXISTS sync_mutations (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          table_name TEXT NOT NULL,
+          row_id TEXT NOT NULL,
+          operation TEXT NOT NULL,
+          payload TEXT,
+          timestamp INTEGER DEFAULT (strftime('%s', 'now')),
+          device_id TEXT,
+          synced INTEGER DEFAULT 0
+        )
+      `);
+
+      await connection.execute(`
+        CREATE TABLE IF NOT EXISTS processed_deltas (
+          file_id TEXT PRIMARY KEY,
+          processed_at INTEGER DEFAULT (strftime('%s', 'now'))
+        )
+      `);
+
+      await connection.execute(`CREATE TABLE IF NOT EXISTS app_config (key TEXT PRIMARY KEY, value TEXT)`);
+      await connection.execute(`INSERT OR IGNORE INTO app_config (key, value) VALUES ('sync_mute', '0')`);
+
+      // 3. TRIGGERS (Replicados para asegurar que cambios en Admin también se sincronicen)
+      const triggerSpecs = [
+        { t: 'conjuntos', ops: ['INSERT', 'UPDATE', 'DELETE'], p: "json_object('nombre', NEW.nombre, 'descripcion', NEW.descripcion)" },
+        { t: 'sheets', ops: ['INSERT', 'UPDATE', 'DELETE'], p: "json_object('conjunto_id', NEW.conjunto_id, 'nombre', NEW.nombre, 'granja', NEW.granja, 'lote', NEW.lote, 'galpon', NEW.galpon, 'fecha_ingreso', NEW.fecha_ingreso, 'procedencia', NEW.procedencia, 'cantidad', NEW.cantidad)" },
+        { t: 'filas', ops: ['INSERT', 'UPDATE', 'DELETE'], p: "json_object('sheet_id', NEW.sheet_id, 'dia', NEW.dia, 'semana', NEW.semana, 'fecha', NEW.fecha, 'alimento_cant', NEW.alimento_cant, 'alimento_diario', NEW.alimento_diario, 'medicina', NEW.medicina, 'gas_diario', NEW.gas_diario, 'mort_diaria', NEW.mort_diaria, 'observacion', NEW.observacion)" }
+      ];
+
+      for (const spec of triggerSpecs) {
+        for (const op of spec.ops) {
+          const suffix = op.toLowerCase().substring(0, 3);
+          const payload = op === 'DELETE' ? 'NULL' : spec.p;
+          const ref = op === 'DELETE' ? 'OLD' : 'NEW';
+          
+          await connection.execute(`
+            CREATE TRIGGER IF NOT EXISTS trg_sync_${spec.t}_${suffix} AFTER ${op} ON ${spec.t}
+            WHEN (SELECT value FROM app_config WHERE key = 'sync_mute') = '0'
+            BEGIN
+              INSERT INTO sync_mutations (table_name, row_id, operation, payload)
+              VALUES ('${spec.t}', ${ref}.id, '${op}', ${payload});
+              ${op === 'UPDATE' ? `UPDATE ${spec.t} SET updated_at = (strftime('%s', 'now')) WHERE id = NEW.id;` : ''}
+            END;
+          `);
+        }
+      }
 
       db = connection;
       return db;
@@ -332,7 +385,7 @@ const showMasterKeyUploadModal = ref(false);
 const pendingMasterKeyBytes = ref<Uint8Array | null>(null);
 const subiendoLlaveADrive = ref(false);
 const showDeleteOldKeyConfirm = ref(false);
-const databaseMalformed = ref(false);
+// databaseMalformed ahora se obtiene de useDrive() para sincronización global
 const showRecoverySuccessModal = ref(false);
 const recoveryType = ref<"local" | "clean">("clean");
 const isConfigLoaded = ref(false);
@@ -2228,6 +2281,7 @@ const {
   isDirty: isDirtyDrive, // Añadido para el indicador de estado
   isOnline: isOnlineDrive,
   syncError: syncErrorDrive,
+  isDatabaseCorrupted: databaseMalformed, // 🛡️ Sincronizar estado de corrupción con useDrive
   // Identidad Cloud
   cloudAccountState,
   fetchAccountState,
@@ -2400,6 +2454,98 @@ const solicitarLogout2FA = () => {
     show2FAVerifyModal.value = true;
   } else {
     signoutDrive();
+  }
+};
+
+const modernizarRespaldo = async (fileId: string) => {
+  const confirmed = await abrirConfirmacion(
+    "Migración Profunda a V3",
+    "Estás por modernizar una base de datos antigua al formato de 'Nivel 3 (Sincronización Delta)'.\n\nEste proceso:\n1. Convertirá IDs numéricos a UUIDs globales.\n2. Inyectará marcas de tiempo de alta precisión.\n3. Habilitará la sincronización inteligente entre dispositivos.\n\n Tus datos se mantendrán intactos. ¿Deseas continuar?",
+    "Confirmar Migración",
+    "info"
+  );
+
+  if (!confirmed) return;
+
+  try {
+    mostrarToast("Iniciando migración profunda... Por favor espera.");
+    
+    // 1. Restauramos el respaldo antiguo localmente primero (sin reiniciar la app)
+    const successRestore = await restoreBackupDrive(fileId, true);
+    if (!successRestore) throw new Error("No se pudo descargar el respaldo para migrar.");
+
+    const database = await initDB();
+
+    // 2. MIGRACIÓN PROFUNDA DE TABLA FILAS (Cambiar de INT a UUID)
+    // Primero verificamos si ya es V3 inspeccionando el esquema real de la tabla 'filas'
+    const checkTable = await database.select<{sql: string}[]>("SELECT sql FROM sqlite_master WHERE name='filas'");
+    if (checkTable[0]?.sql.toLowerCase().includes("text primary key")) {
+       mostrarToast("Este respaldo ya está en formato V3 o superior.");
+       return;
+    }
+
+    console.log("🛠️ Re-estructurando tabla filas para Nivel 3 (UUID Migration)...");
+    
+    // a. Crear tabla temporal con el esquema nuevo (UUID y updated_at)
+    await database.execute(`
+      CREATE TABLE filas_modernizada (
+          id TEXT PRIMARY KEY,
+          sheet_id TEXT NOT NULL,
+          dia INTEGER NOT NULL,
+          semana INTEGER NOT NULL,
+          fecha TEXT,
+          alimento_cant TEXT,
+          alimento_diario REAL,
+          alimento_acum REAL,
+          medicina TEXT,
+          gas_diario REAL,
+          gas_acum REAL,
+          mort_diaria REAL,
+          mort_acum REAL,
+          mort_porcentaje REAL,
+          observacion TEXT,
+          updated_at INTEGER DEFAULT (strftime('%s', 'now')),
+          FOREIGN KEY (sheet_id) REFERENCES sheets(id)
+      )
+    `);
+
+    // b. Migrar datos generando nuevos UUIDs para cada fila antigua
+    const oldRows = await database.select<any[]>("SELECT * FROM filas");
+    for (const row of oldRows) {
+      const newId = crypto.randomUUID();
+      await database.execute(`
+        INSERT INTO filas_modernizada 
+        (id, sheet_id, dia, semana, fecha, alimento_cant, alimento_diario, alimento_acum, 
+         medicina, gas_diario, gas_acum, mort_diaria, mort_acum, mort_porcentaje, observacion, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        newId, row.sheet_id, row.dia, row.semana, row.fecha, row.alimento_cant, row.alimento_diario,
+        row.alimento_acum, row.medicina, row.gas_diario, row.gas_acum, row.mort_diaria,
+        row.mort_acum, row.mort_porcentaje, row.observacion, Math.floor(Date.now()/1000)
+      ]);
+    }
+
+    // c. Intercambiar tablas antiguas por las nuevas modernizadas
+    await database.execute("DROP TABLE filas");
+    await database.execute("ALTER TABLE filas_modernizada RENAME TO filas");
+    
+    // 3. Crear un nuevo respaldo V3 en la nube indicando la modernización
+    mostrarToast("Arquitectura modernizada con éxito. Sincronizando nueva versión...");
+    
+    // Obtenemos el path real de la db para leer el binario
+    const dbPath = await invoke<string>("get_db_path");
+    const dbContent = await readFile(dbPath);
+    const blob = new Blob([dbContent], { type: "application/x-sqlite3" });
+    const fileToUpload = new File([blob], `pollos_backup_v3_modernized_${Date.now()}.db`, { type: "application/x-sqlite3" });
+    
+    await uploadFileDrive(fileToUpload, "backup");
+    
+    mostrarToast("✅ Proceso completado. La base de datos ahora es compatible con Sincronización Nivel 3.", "success");
+    await listBackupsDrive(); // Refrescar lista de UI
+
+  } catch (e) {
+    console.error("Error en migración V3:", e);
+    mostrarToast("Error crítico durante la migración: " + e, "error");
   }
 };
 
@@ -3993,9 +4139,9 @@ const reabrirMain = async () => {
                     <thead>
                       <tr>
                         <th>Nombre del Archivo</th>
+                        <th>Arquitectura</th>
                         <th>Ubicación (Nivel)</th>
                         <th>Fecha</th>
-                        <th>Tamaño</th>
                         <th>Acción</th>
                       </tr>
                     </thead>
@@ -4013,18 +4159,35 @@ const reabrirMain = async () => {
                           </div>
                         </td>
                         <td>
+                          <span 
+                            class="location-badge"
+                            :class="file.name.includes('delta') || file.name.includes('_v3') ? 'bg-indigo-100 text-indigo-700' : 'bg-amber-100 text-amber-700'"
+                            style="font-size: 10px; border-radius: 4px; padding: 2px 6px;"
+                          >
+                            {{ file.name.includes('delta') || file.name.includes('_v3') ? 'V3 (Sync)' : 'Legacy' }}
+                          </span>
+                        </td>
+                        <td>
                           <span class="location-badge">
                             {{ formatearUbicacionDrive(file.modifiedTime) }}
                           </span>
                         </td>
-                        <td>
+                        <td class="text-xs text-gray-500">
                           {{ new Date(file.modifiedTime).toLocaleString() }}
                         </td>
                         <td>
-                          {{ (Number(file.size) / 1024 / 1024).toFixed(2) }} MB
-                        </td>
-                        <td>
                           <div class="row-actions">
+                            <!-- BOTÓN MIGRAR (Solo para Legacy) -->
+                            <button
+                               v-if="!file.name.includes('delta') && !file.name.includes('_v3') && !file.name.endsWith('.key')"
+                               class="btn-primary btn-sm"
+                               style="background: #f59e0b; border-color: #d97706;"
+                               @click="modernizarRespaldo(file.id)"
+                               title="Modernizar arquitectura para Sincronización Delta"
+                            >
+                               Migrar V3
+                            </button>
+
                             <button
                               class="btn-danger btn-sm"
                               @click="confirmarRestaurarBackup(file.id)"

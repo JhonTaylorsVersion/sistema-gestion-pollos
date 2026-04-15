@@ -217,9 +217,11 @@ const {
   isOnline,
   syncError,
   abrirConfirmacion,
+  isDatabaseCorrupted,
 } = useSheets();
 
 const syncStatus = computed(() => {
+  if (isDatabaseCorrupted.value) return "error"; // 🛡️ Prioridad alta: Base de datos dañada
   if (isCloudLoading.value) return "loading";
   if (!isOnline.value) return "offline";
   if (!isCloudAuth.value) return "not-linked";

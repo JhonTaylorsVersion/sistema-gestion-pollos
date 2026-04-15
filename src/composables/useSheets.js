@@ -26,6 +26,7 @@ export function useSheets() {
     loading: isCloudLoading,
     isOnline,
     syncError,
+    isDatabaseCorrupted,
   } = useDrive();
 
 
@@ -47,14 +48,17 @@ export function useSheets() {
 
     if (tablesInitialized) return db;
 
-    // Garantizar que TODAS las tablas de negocio existan
+    // 1. Tablas Base y Migraciones
     await db.execute(`
       CREATE TABLE IF NOT EXISTS conjuntos (
         id TEXT PRIMARY KEY,
         nombre TEXT NOT NULL,
-        descripcion TEXT
+        descripcion TEXT,
+        updated_at INTEGER DEFAULT (strftime('%s', 'now'))
       )
     `);
+    // Migración: Asegurar updated_at en conjuntos
+    try { await db.execute("ALTER TABLE conjuntos ADD COLUMN updated_at INTEGER DEFAULT (strftime('%s', 'now'))"); } catch(e) {}
 
     await db.execute(`
       CREATE TABLE IF NOT EXISTS sheets (
@@ -67,33 +71,167 @@ export function useSheets() {
         fecha_ingreso TEXT,
         procedencia TEXT,
         cantidad INTEGER,
+        updated_at INTEGER DEFAULT (strftime('%s', 'now')),
         FOREIGN KEY (conjunto_id) REFERENCES conjuntos(id)
+      )
+    `);
+    // Migración: Asegurar updated_at en sheets
+    try { await db.execute("ALTER TABLE sheets ADD COLUMN updated_at INTEGER DEFAULT (strftime('%s', 'now'))"); } catch(e) {}
+
+    //  NIVELL 3: Cambiamos ID de filas a TEXT para UUIDs universales
+    // Nota: Si la tabla ya existía como INTEGER, ALTER TABLE no funcionará para cambiar la PK.
+    // Pero en este caso, preferimos recrearla si es necesario o manejar el error.
+    try {
+      await db.execute(`
+        CREATE TABLE IF NOT EXISTS filas (
+          id TEXT PRIMARY KEY, 
+          sheet_id TEXT NOT NULL,
+          dia INTEGER NOT NULL,
+          semana INTEGER NOT NULL,
+          fecha TEXT,
+          alimento_cant TEXT,
+          alimento_diario REAL,
+          alimento_acum REAL,
+          medicina TEXT,
+          gas_diario REAL,
+          gas_acum REAL,
+          mort_diaria REAL,
+          mort_acum REAL,
+          mort_porcentaje REAL,
+          observacion TEXT,
+          updated_at INTEGER DEFAULT (strftime('%s', 'now')),
+          FOREIGN KEY (sheet_id) REFERENCES sheets(id)
+        )
+      `);
+    } catch (e) {
+      console.warn("⚠️ Error al crear tabla filas (posible conflicto de esquema):", e);
+    }
+    // Migración: Asegurar updated_at en filas
+    try { await db.execute("ALTER TABLE filas ADD COLUMN updated_at INTEGER DEFAULT (strftime('%s', 'now'))"); } catch(e) {}
+
+    // 2. Infraestructura de Sincronización (Nivel 3)
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS sync_mutations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        table_name TEXT NOT NULL,
+        row_id TEXT NOT NULL,
+        operation TEXT NOT NULL, -- 'INSERT', 'UPDATE', 'DELETE'
+        payload TEXT,            -- Contenido JSON del cambio
+        timestamp INTEGER DEFAULT (strftime('%s', 'now')),
+        device_id TEXT,
+        synced INTEGER DEFAULT 0 -- 0: Pendiente, 1: Sincronizado
       )
     `);
 
     await db.execute(`
-      CREATE TABLE IF NOT EXISTS filas (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        sheet_id TEXT NOT NULL,
-        dia INTEGER NOT NULL,
-        semana INTEGER NOT NULL,
-        fecha TEXT,
-        alimento_cant TEXT,
-        alimento_diario REAL,
-        alimento_acum REAL,
-        medicina TEXT,
-        gas_diario REAL,
-        gas_acum REAL,
-        mort_diaria REAL,
-        mort_acum REAL,
-        mort_porcentaje REAL,
-        observacion TEXT,
-        FOREIGN KEY (sheet_id) REFERENCES sheets(id)
+      CREATE TABLE IF NOT EXISTS processed_deltas (
+        file_id TEXT PRIMARY KEY,
+        processed_at INTEGER DEFAULT (strftime('%s', 'now'))
       )
     `);
 
-    // También creamos app_config aquí por si acaso se inicia desde la ventana principal
     await db.execute(`CREATE TABLE IF NOT EXISTS app_config (key TEXT PRIMARY KEY, value TEXT)`);
+
+    // 3. TRIGGERS DE CAPTURA AUTOMÁTICA (Motor de Deltas)
+    // Usamos app_config(sync_mute) para evitar bucles infinitos al aplicar cambios de la nube.
+    await db.execute(`INSERT OR IGNORE INTO app_config (key, value) VALUES ('sync_mute', '0')`);
+
+    // Triggers para 'conjuntos'
+    await db.execute(`
+      CREATE TRIGGER IF NOT EXISTS trg_sync_conjuntos_ins AFTER INSERT ON conjuntos
+      WHEN (SELECT value FROM app_config WHERE key = 'sync_mute') = '0'
+      BEGIN
+        INSERT INTO sync_mutations (table_name, row_id, operation, payload)
+        VALUES ('conjuntos', NEW.id, 'INSERT', json_object('nombre', NEW.nombre, 'descripcion', NEW.descripcion));
+      END;
+    `);
+    await db.execute(`
+      CREATE TRIGGER IF NOT EXISTS trg_sync_conjuntos_upd AFTER UPDATE ON conjuntos
+      WHEN (SELECT value FROM app_config WHERE key = 'sync_mute') = '0'
+      BEGIN
+        INSERT INTO sync_mutations (table_name, row_id, operation, payload)
+        VALUES ('conjuntos', NEW.id, 'UPDATE', json_object('nombre', NEW.nombre, 'descripcion', NEW.descripcion));
+        UPDATE conjuntos SET updated_at = (strftime('%s', 'now')) WHERE id = NEW.id;
+      END;
+    `);
+    await db.execute(`
+      CREATE TRIGGER IF NOT EXISTS trg_sync_conjuntos_del AFTER DELETE ON conjuntos
+      WHEN (SELECT value FROM app_config WHERE key = 'sync_mute') = '0'
+      BEGIN
+        INSERT INTO sync_mutations (table_name, row_id, operation, payload)
+        VALUES ('conjuntos', OLD.id, 'DELETE', NULL);
+      END;
+    `);
+
+    // Triggers para 'sheets'
+    await db.execute(`
+      CREATE TRIGGER IF NOT EXISTS trg_sync_sheets_ins AFTER INSERT ON sheets
+      WHEN (SELECT value FROM app_config WHERE key = 'sync_mute') = '0'
+      BEGIN
+        INSERT INTO sync_mutations (table_name, row_id, operation, payload)
+        VALUES ('sheets', NEW.id, 'INSERT', json_object(
+          'conjunto_id', NEW.conjunto_id, 'nombre', NEW.nombre, 'granja', NEW.granja,
+          'lote', NEW.lote, 'galpon', NEW.galpon, 'fecha_ingreso', NEW.fecha_ingreso,
+          'procedencia', NEW.procedencia, 'cantidad', NEW.cantidad
+        ));
+      END;
+    `);
+    await db.execute(`
+      CREATE TRIGGER IF NOT EXISTS trg_sync_sheets_upd AFTER UPDATE ON sheets
+      WHEN (SELECT value FROM app_config WHERE key = 'sync_mute') = '0'
+      BEGIN
+        INSERT INTO sync_mutations (table_name, row_id, operation, payload)
+        VALUES ('sheets', NEW.id, 'UPDATE', json_object(
+          'granja', NEW.granja, 'lote', NEW.lote, 'galpon', NEW.galpon,
+          'fecha_ingreso', NEW.fecha_ingreso, 'procedencia', NEW.procedencia, 'cantidad', NEW.cantidad
+        ));
+        UPDATE sheets SET updated_at = (strftime('%s', 'now')) WHERE id = NEW.id;
+      END;
+    `);
+    await db.execute(`
+      CREATE TRIGGER IF NOT EXISTS trg_sync_sheets_del AFTER DELETE ON sheets
+      WHEN (SELECT value FROM app_config WHERE key = 'sync_mute') = '0'
+      BEGIN
+        INSERT INTO sync_mutations (table_name, row_id, operation, payload)
+        VALUES ('sheets', OLD.id, 'DELETE', NULL);
+      END;
+    `);
+
+    // Triggers para 'filas'
+    await db.execute(`
+      CREATE TRIGGER IF NOT EXISTS trg_sync_filas_ins AFTER INSERT ON filas
+      WHEN (SELECT value FROM app_config WHERE key = 'sync_mute') = '0'
+      BEGIN
+        INSERT INTO sync_mutations (table_name, row_id, operation, payload)
+        VALUES ('filas', NEW.id, 'INSERT', json_object(
+          'sheet_id', NEW.sheet_id, 'dia', NEW.dia, 'semana', NEW.semana, 'fecha', NEW.fecha,
+          'alimento_cant', NEW.alimento_cant, 'alimento_diario', NEW.alimento_diario,
+          'medicina', NEW.medicina, 'gas_diario', NEW.gas_diario, 'mort_diaria', NEW.mort_diaria,
+          'observacion', NEW.observacion
+        ));
+      END;
+    `);
+    await db.execute(`
+      CREATE TRIGGER IF NOT EXISTS trg_sync_filas_upd AFTER UPDATE ON filas
+      WHEN (SELECT value FROM app_config WHERE key = 'sync_mute') = '0'
+      BEGIN
+        INSERT INTO sync_mutations (table_name, row_id, operation, payload)
+        VALUES ('filas', NEW.id, 'UPDATE', json_object(
+          'fecha', NEW.fecha, 'alimento_cant', NEW.alimento_cant, 'alimento_diario', NEW.alimento_diario,
+          'medicina', NEW.medicina, 'gas_diario', NEW.gas_diario, 'mort_diaria', NEW.mort_diaria,
+          'observacion', NEW.observacion
+        ));
+        UPDATE filas SET updated_at = (strftime('%s', 'now')) WHERE id = NEW.id;
+      END;
+    `);
+    await db.execute(`
+      CREATE TRIGGER IF NOT EXISTS trg_sync_filas_del AFTER DELETE ON filas
+      WHEN (SELECT value FROM app_config WHERE key = 'sync_mute') = '0'
+      BEGIN
+        INSERT INTO sync_mutations (table_name, row_id, operation, payload)
+        VALUES ('filas', OLD.id, 'DELETE', NULL);
+      END;
+    `);
 
     tablesInitialized = true;
     return db;
@@ -319,8 +457,11 @@ export function useSheets() {
     return `GAL${numeroFormateado}-${uniquePart}:${mes}-${year}`;
   };
 
+  const crearFilaId = () => crypto.randomUUID();
+
   const crearFilasVacias = () =>
     Array.from({ length: TOTAL_DIAS }, (_, i) => ({
+      id: crearFilaId(),
       dia: i + 1,
       semana: Math.floor(i / 7) + 1,
       fecha: "",
@@ -2859,15 +3000,18 @@ export function useSheets() {
           ],
         );
 
-        // Limpiar y re-insertar filas para garantizar integridad por cada galpón
-        await database.execute(`DELETE FROM filas WHERE sheet_id = ?`, [s.id]);
+        // EVITAR DELETE MASIVO (Nivel 3 requiere IDs estables)
         for (const fila of s.filas) {
+          // Garantizar que la fila tenga ID si por alguna razón no lo tiene
+          if (!fila.id) fila.id = crypto.randomUUID();
+
           await database.execute(
-            `INSERT INTO filas
-            (sheet_id, dia, semana, fecha, alimento_cant, alimento_diario, alimento_acum,
+            `INSERT OR REPLACE INTO filas
+            (id, sheet_id, dia, semana, fecha, alimento_cant, alimento_diario, alimento_acum,
              medicina, gas_diario, gas_acum, mort_diaria, mort_acum, mort_porcentaje, observacion)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
+              fila.id,
               s.id,
               fila.dia,
               fila.semana,
@@ -2916,15 +3060,19 @@ export function useSheets() {
           : "Autoguardado correctamente",
       };
 
-      // Opcional: Ocultar el mensaje de éxito después de 4 segundos para limpiar la pantalla
-      // --- DISPARAR BACKUP AUTOMÁTICO EN LA NUBE (Solo si hay cambios pendientes) ---
+      // --- DISPARAR SINCRONIZACIÓN HÍBRIDA (Delta + Full) ---
       if (isCloudAuth.value && isDirty.value) {
-        console.log("☁️ Intentando sincronización con Drive...");
-        const success = await uploadBackup(false);
-        if (success) {
-          isDirty.value = false;
-          console.log("✅ Sincronización completada. isDirty = false");
-        }
+        console.log("☁️ [useSheets] Iniciando sincronización HÍBRIDA...");
+
+        // 1. Sincronización Delta (Rápida, Nivel 3)
+        await syncDelta();
+        
+        // 2. Intento de Backup Completo (Seguridad, Nivel 2)
+        // El parámetro 'false' indica que es automático; useDrive respetará el cooldown de 60s.
+        await uploadBackup(false);
+
+        isDirty.value = false;
+        console.log("✅ [useSheets] Sincronización híbrida finalizada.");
       }
 
       setTimeout(() => {
@@ -3642,6 +3790,9 @@ export function useSheets() {
       await initDB();
       // 🔥 AUTO-RESCATE: Cargamos el último lote guardado al arrancar
       await loadLatestBatchFromDB();
+      
+      // 🚀 NIVEL 3: Sincronización Delta al arrancar
+      await syncDelta();
     } catch (error) {
       console.error("Error inicializando SQLite:", error);
     }
@@ -3946,6 +4097,123 @@ export function useSheets() {
     window.removeEventListener("mousemove", handleMouseMoveGlobal);
   });
 
+  // --- MOTOR DE SINCRONIZACIÓN DELTA (NIVEL 3) ---
+
+  const getPendingMutations = async () => {
+    const database = await initDB();
+    const rows = await database.select(
+      "SELECT * FROM sync_mutations WHERE synced = 0 ORDER BY timestamp ASC",
+    );
+    return rows;
+  };
+
+  const markMutationsSynced = async (ids) => {
+    if (!ids.length) return;
+    const database = await initDB();
+    const placeholders = ids.map(() => "?").join(",");
+    await database.execute(
+      `UPDATE sync_mutations SET synced = 1 WHERE id IN (${placeholders})`,
+      ids,
+    );
+  };
+
+  const applyRemoteMutation = async (m) => {
+    const database = await initDB();
+    const payload = typeof m.payload === "string" ? JSON.parse(m.payload) : m.payload;
+
+    // Marcamos que esta es una acción de sincronización para evitar disparar Triggers de subida infinitos
+    isInternalAction.value = true;
+    await database.execute("UPDATE app_config SET value = '1' WHERE key = 'sync_mute'");
+
+    try {
+      console.log(`☁️ Aplicando mutación remota: ${m.operation} en ${m.table_name}[${m.row_id}]`);
+
+      if (m.operation === "INSERT" || m.operation === "UPDATE") {
+        // Estrategia: "Última escritura gana por campo"
+        // Verificamos si el registro local es más reciente que la mutación que viene
+        const existing = await database.select(
+          `SELECT updated_at FROM ${m.table_name} WHERE id = ?`,
+          [m.row_id]
+        );
+
+        if (existing.length > 0 && existing[0].updated_at > m.timestamp) {
+          console.log(`⚠️ Mutación ignorada: El registro local es más reciente.`);
+          return;
+        }
+
+        const keys = Object.keys(payload);
+        const values = Object.values(payload);
+
+        if (m.operation === "INSERT" || existing.length === 0) {
+          const placeholders = keys.map(() => "?").join(",");
+          const columns = keys.join(",");
+          await database.execute(
+            `INSERT OR REPLACE INTO ${m.table_name} (id, ${columns}, updated_at) VALUES (?, ${placeholders}, ?)`,
+            [m.row_id, ...values, m.timestamp]
+          );
+        } else {
+          const setClause = keys.map(k => `${k} = ?`).join(", ");
+          await database.execute(
+            `UPDATE ${m.table_name} SET ${setClause}, updated_at = ? WHERE id = ?`,
+            [...values, m.timestamp, m.row_id]
+          );
+        }
+      } else if (m.operation === "DELETE") {
+        await database.execute(`DELETE FROM ${m.table_name} WHERE id = ?`, [m.row_id]);
+      }
+    } finally {
+      await database.execute("UPDATE app_config SET value = '0' WHERE key = 'sync_mute'");
+      isInternalAction.value = false;
+    }
+  };
+
+  const isDeltaProcessed = async (fileId) => {
+    const database = await initDB();
+    const rows = await database.select(
+      "SELECT 1 FROM processed_deltas WHERE file_id = ?",
+      [fileId]
+    );
+    return rows.length > 0;
+  };
+
+  const markDeltaProcessed = async (fileId) => {
+    const database = await initDB();
+    await database.execute(
+      "INSERT OR IGNORE INTO processed_deltas (file_id) VALUES (?)",
+      [fileId]
+    );
+  };
+
+  const syncDelta = async () => {
+    const { pushDeltas, pullDeltas, isOnline, isAuthenticated } = useDrive();
+    
+    if (!isOnline.value || !isAuthenticated.value) {
+      console.warn("☁️ [useSheets] Imposible sincronizar: Offline o no autenticado.");
+      return;
+    }
+
+    console.log("☁️ [useSheets] Sincronizando deltas (Nivel 3)...");
+
+    // 1. PULL: Traer cambios de otros dispositivos primero
+    await pullDeltas(
+      isDeltaProcessed,
+      markDeltaProcessed,
+      applyRemoteMutation,
+      async () => {
+        // Al terminar un pull exitoso, recargamos el lote actual para unir cambios
+        if (conjunto.value?.id) {
+          console.log("🔄 [useSheets] Recargando lote tras PULL de Drive.");
+          await loadBatchFromDB(conjunto.value.id);
+        }
+      }
+    );
+
+    // 2. PUSH: Subir cambios locales pendientes
+    await pushDeltas(getPendingMutations, markMutationsSynced);
+    
+    console.log("✅ [useSheets] Sincronización Delta finalizada.");
+  };
+
   return {
     selectedTabs,
     esFormatoActivo,
@@ -4040,6 +4308,11 @@ export function useSheets() {
     estadoGuardado,
     loadBatchFromDB,
     loadLatestBatchFromDB,
+    getPendingMutations,
+    markMutationsSynced,
+    applyRemoteMutation,
+    syncDelta,
+    isDeltaSyncActive: true,
 
     setTableWrapperRef,
     isOnline,
@@ -4050,6 +4323,7 @@ export function useSheets() {
     siguientePasoExportacion,
     todosGalponesSeleccionados,
     toggleTodosGalpones,
+    isDatabaseCorrupted,
   };
 }
 
