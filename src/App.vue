@@ -11,7 +11,8 @@ import {
 import { useSheets } from "./composables/useSheets";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import SyncIcon from "./components/SyncIcon.vue";
-
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { emit } from "@tauri-apps/api/event";
 const isForceClosing = ref(false);
 
 const handleConfigClick = async () => {
@@ -116,8 +117,6 @@ const cambiarAEstadisticas = () => {
   vistaGalpon.value = "control";
   irAEstadisticas();
 };
-
-import { getCurrentWindow } from "@tauri-apps/api/window";
 
 const formatearIdParaUsuario = (id) => {
   if (!id) return "";
@@ -228,13 +227,23 @@ const {
 } = useSheets();
 
 const syncStatus = computed(() => {
-  if (isDatabaseCorrupted.value) return "error"; // 🛡️ Prioridad alta: Base de datos dañada
+  if (isDatabaseCorrupted.value) return "error";
   if (isCloudLoading.value) return "loading";
   if (!isOnline.value) return "offline";
   if (!isCloudAuth.value) return "not-linked";
   if (syncError.value) return "error";
-  return "connected";
+  if (isDirty.value) return "pending"; // <--- AÑADIDO: Muestra el reloj
+  return "success"; // <--- CORREGIDO: Antes decía "connected"
 });
+
+// Esto enviará el estado en tiempo real a todas las ventanas
+watch(
+  [isCloudLoading, isDirty],
+  ([loading, dirty]) => {
+    emit("app-sync-state", { loading, dirty });
+  },
+  { immediate: true },
+);
 
 const syncTooltip = computed(() => {
   if (isCloudLoading.value) return "Sincronizando con Google Drive...";

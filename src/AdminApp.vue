@@ -2385,14 +2385,21 @@ const syncStatus = computed(() => {
     ) {
       return "offline";
     }
-    if (loadingDrive.value) return "loading";
+
+    // 👇 MODIFICADO: Evalúa si Drive está cargando en Admin o si App.vue avisó que está cargando
+    if (loadingDrive.value || appSyncState.value.loading) return "loading";
+
     if (syncErrorDrive.value) return "error";
-    if (isDirtyDrive.value) return "pending";
+
+    // 👇 MODIFICADO: Evalúa si hay cambios sin guardar en Admin o en App.vue
+    if (isDirtyDrive.value || appSyncState.value.dirty) return "pending";
+
     return "success";
   })();
 
+  // Opcional: Actualicé el console.log para que también te muestre qué está pasando con App.vue
   console.log(
-    `📊 [SyncStatus] Calculado: ${status} | DB_Malformed: ${databaseMalformed.value} | Cloud_Error: ${syncErrorDrive.value}`,
+    `📊 [SyncStatus] Calculado: ${status} | DB_Malformed: ${databaseMalformed.value} | Cloud_Error: ${syncErrorDrive.value} | App_Loading: ${appSyncState.value.loading} | App_Dirty: ${appSyncState.value.dirty}`,
   );
   return status;
 });
@@ -2458,6 +2465,8 @@ const iniciarLoginConSeguridad = async () => {
 };
 
 const eliminandoBackup = ref(false);
+
+const appSyncState = ref({ loading: false, dirty: false });
 
 const confirmarEliminarBackup = async (fileId: string, _fileName: string) => {
   if (!is2FAEnabled.value) {
@@ -2856,6 +2865,10 @@ onMounted(async () => {
       event.payload,
     );
     databaseMalformed.value = true;
+  });
+
+  listen("app-sync-state", (event: any) => {
+    appSyncState.value = event.payload;
   });
 
   setConfirmHandler(async (msg, opts) => {
