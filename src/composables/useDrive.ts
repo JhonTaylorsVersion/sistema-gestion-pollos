@@ -1,4 +1,4 @@
-import { ref, onMounted, computed } from "vue";
+import { ref, onMounted, computed, watch } from "vue";
 
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
@@ -40,6 +40,12 @@ const user = ref<GoogleUser | null>(
   JSON.parse(localStorage.getItem("google_user_cache") || "null"),
 );
 const loading = ref(false);
+
+// 🔍 DIAGNÓSTICO: Rastreo de estado de carga global
+watch(loading, (newVal) => {
+  console.log(`♻️ [useDrive] GLOBAL LOADING CHANGE: ${newVal}`);
+});
+
 const backups = ref<DriveFile[]>(
   JSON.parse(localStorage.getItem("google_backups_cache") || "[]"),
 );
@@ -510,6 +516,7 @@ export function useDrive() {
       );
       deferredTimer = setTimeout(() => {
         deferredTimer = null;
+        console.log("⏰ [Drive] Disparando auto-backup diferido ahora.");
         uploadBackup(false, true);
       }, remaining);
 
@@ -522,6 +529,7 @@ export function useDrive() {
 
     try {
       loading.value = true;
+      console.log(`♻️ [useDrive] loading set to TRUE. Window: ${window.location.pathname}`);
       syncError.value = null; // Limpiar errores previos al iniciar
 
       if (!isOnline.value) {

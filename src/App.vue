@@ -224,7 +224,24 @@ const {
   syncError,
   abrirConfirmacion,
   isDatabaseCorrupted,
+  resetLoadingDrive,
 } = useSheets();
+
+// 🛠️ DIAGNÓSTICO: Seguimiento de estado en producción
+watch(
+  [isCloudLoading, isDirty, isOnline, isCloudAuth, syncError, isDatabaseCorrupted],
+  ([loading, dirty, online, auth, error, corrupted]) => {
+    console.log("🔄 [SyncStatus Debug]:", {
+      loading,
+      dirty,
+      online,
+      auth,
+      hasError: !!error,
+      corrupted,
+    });
+  },
+  { immediate: true },
+);
 
 const syncStatus = computed(() => {
   if (isDatabaseCorrupted.value) return "error";
@@ -240,6 +257,7 @@ const syncStatus = computed(() => {
 watch(
   [isCloudLoading, isDirty],
   ([loading, dirty]) => {
+    console.log(`📡 [App.vue] EMITTING app-sync-state: loading=${loading}, dirty=${dirty}`);
     emit("app-sync-state", { loading, dirty });
   },
   { immediate: true },
@@ -393,6 +411,17 @@ onMounted(async () => {
       await uploadBackup(false);
     }
   });
+
+  // 🛡️ [RECOVERY GUARD] Forzar reset del estado de carga al iniciar (solo si está atascado)
+  // Especialmente crítico tras una restauración en producción donde el proceso se reinicia abruptamente
+  setTimeout(() => {
+    if (isCloudLoading.value) {
+      console.warn(
+        "🧹 [Recovery Guard] Detectado estado de carga residual en el arranque. Limpiando...",
+      );
+      resetLoadingDrive();
+    }
+  }, 1000);
 });
 </script>
 

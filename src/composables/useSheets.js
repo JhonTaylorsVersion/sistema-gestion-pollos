@@ -4378,6 +4378,10 @@ export function useSheets() {
 
     setTableWrapperRef,
     isOnline,
+    resetLoadingDrive: () => {
+      const { resetLoading } = useDrive();
+      resetLoading();
+    },
     syncError,
     abrirConfirmacion,
     pasoExportacion,

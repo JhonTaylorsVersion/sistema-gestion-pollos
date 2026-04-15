@@ -377,6 +377,44 @@ const is2FAEnabled = computed(
 );
 
 const filaEliminandoId = ref<string | null>(null);
+
+// NUEVAS VARIABLES PARA CONTROLAR EL BLOQUEO GLOBAL
+const restaurandoBackupId = ref<string | null>(null);
+
+const isProcessBusy = computed(() => {
+  const loading = loadingDrive.value;
+  const syncLoading = appSyncState.value.loading;
+  const syncDirty = appSyncState.value.dirty; // 🆕 También bloqueamos si hay cambios pendientes por subir
+  const restoring = restaurandoBackupId.value !== null;
+  const deletingRow = filaEliminandoId.value !== null;
+  const deletingBackup = eliminandoBackup.value;
+  const verifying2FA = verificando2FA.value;
+
+  const busy = !!(
+    loading ||
+    syncLoading ||
+    syncDirty || // 🆕 Si el sistema está "sucio", no permitimos restauraciones
+    restoring ||
+    deletingRow ||
+    deletingBackup ||
+    verifying2FA
+  );
+
+  if (busy) {
+    console.log("🔒 [isProcessBusy] STUCK:", {
+      localLoading: loading,
+      remoteLoading: syncLoading,
+      remoteDirty: syncDirty,
+      restoring,
+      deletingRow,
+      deletingBackup,
+      verifying2FA,
+    });
+  }
+
+  return busy;
+});
+
 const show2FASetupModal = ref(false);
 const setup2FAData = ref<{ secret: string; qr: string } | null>(null);
 
@@ -2836,6 +2874,7 @@ const procesarEliminacionCon2FA = async () => {
         listBackupsDrive();
       } else if (targetId.startsWith("RESTORE_")) {
         const fileId = targetId.replace("RESTORE_", "");
+        restaurandoBackupId.value = fileId;
         await restoreBackupDrive(fileId);
       }
     } else {
@@ -2851,6 +2890,7 @@ const procesarEliminacionCon2FA = async () => {
     verificando2FA.value = false;
     filaEliminandoId.value = null;
     verifyTargetFileId.value = null;
+    restaurandoBackupId.value = null;
   }
 };
 
@@ -2868,6 +2908,7 @@ onMounted(async () => {
   });
 
   listen("app-sync-state", (event: any) => {
+    console.log("📥 [AdminApp] RECEIVED app-sync-state:", event.payload);
     appSyncState.value = event.payload;
   });
 
@@ -3190,7 +3231,7 @@ const reabrirMain = async () => {
             "
             @click="repararBaseDeDatos"
           >
-            🚀 Ejecutar Reparación de Emergencia Ahora
+            Ejecutar Reparación de Emergencia Ahora
           </button>
         </div>
 
@@ -4215,7 +4256,22 @@ const reabrirMain = async () => {
                 <!-- Lista de Backups -->
                 <div class="sync-card backups-list">
                   <div class="list-header">
-                    <h3>Copias de Seguridad Disponibles</h3>
+                    <div style="display: flex; align-items: center; gap: 10px">
+                      <h3 style="margin: 0">Copias de Seguridad Disponibles</h3>
+                      <!-- Indicador de Bloqueo de Seguridad Global -->
+                      <transition name="fade">
+                        <div 
+                          v-if="isProcessBusy" 
+                          class="security-block-indicator"
+                          title="Protección Activa: La restauración está bloqueada mientras hay una sincronización en curso."
+                        >
+                          <svg viewBox="0 0 24 24" fill="none" width="16" height="16">
+                            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                          </svg>
+                          <span>SISTEMA BLOQUEADO</span>
+                        </div>
+                      </transition>
+                    </div>
                     <button
                       class="btn-icon-only"
                       @click="() => listBackupsDrive()"
@@ -4224,7 +4280,7 @@ const reabrirMain = async () => {
                           ? 'No se puede actualizar sin internet'
                           : 'Actualizar lista'
                       "
-                      :disabled="loadingDrive || !isOnlineDrive"
+                      :disabled="isProcessBusy || !isOnlineDrive"
                     >
                       <svg
                         viewBox="0 0 24 24"
@@ -4326,7 +4382,6 @@ const reabrirMain = async () => {
                         </td>
                         <td>
                           <div class="row-actions">
-                            <!-- BOTÓN MIGRAR (Solo para Legacy) -->
                             <button
                               v-if="
                                 !file.name.includes('delta') &&
@@ -4336,33 +4391,50 @@ const reabrirMain = async () => {
                               class="btn-primary btn-sm"
                               style="background: #f59e0b; border-color: #d97706"
                               @click="modernizarRespaldo(file.id)"
-                              title="Modernizar arquitectura para Sincronización Delta"
+                              :disabled="isProcessBusy || !isOnlineDrive"
+                              :title="
+                                isProcessBusy
+                                  ? 'Hay un proceso en curso, por favor espera...'
+                                  : 'Modernizar arquitectura para Sincronización Delta'
+                              "
                             >
                               Migrar V3
                             </button>
 
                             <button
                               class="btn-danger btn-sm"
-                              @click="confirmarRestaurarBackup(file.id)"
-                              :disabled="
-                                !!(
-                                  loadingDrive ||
-                                  eliminandoBackup ||
-                                  !isOnlineDrive
-                                )
+                              style="
+                                display: flex;
+                                align-items: center;
+                                justify-content: center;
+                                gap: 6px;
                               "
+                              @click="confirmarRestaurarBackup(file.id)"
+                              :disabled="isProcessBusy || !isOnlineDrive"
                               :title="
                                 !isOnlineDrive
                                   ? 'Se requiere conexión a internet'
                                   : !is2FAEnabled
                                     ? 'Haz clic para configurar seguridad y restaurar'
-                                    : loadingDrive
-                                      ? 'Espera a que termine la sincronización'
-                                      : 'Restaurar esta versión'
+                                    : restaurandoBackupId === file.id
+                                      ? 'Restaurando... La app se reiniciará al terminar.'
+                                      : isProcessBusy
+                                        ? 'Hay otro proceso en curso, por favor espera...'
+                                        : 'Restaurar esta versión'
                               "
                             >
-                              Restaurar
+                              <div
+                                v-if="restaurandoBackupId === file.id"
+                                class="mini-spinner"
+                                style="margin-right: 0"
+                              ></div>
+                              {{
+                                restaurandoBackupId === file.id
+                                  ? "Restaurando..."
+                                  : "Restaurar"
+                              }}
                             </button>
+
                             <button
                               class="btn-secondary btn-sm btn-delete"
                               :title="
@@ -4370,10 +4442,10 @@ const reabrirMain = async () => {
                                   ? 'No disponible sin conexión'
                                   : !is2FAEnabled
                                     ? 'Haz clic para configurar seguridad y eliminar'
-                                    : loadingDrive
-                                      ? 'Sincronización en curso...'
-                                      : filaEliminandoId === file.id
-                                        ? 'Eliminando...'
+                                    : filaEliminandoId === file.id
+                                      ? 'Eliminando de la nube...'
+                                      : isProcessBusy
+                                        ? 'Hay un proceso en curso, espera...'
                                         : 'Eliminar permanentemente'
                               "
                               @click="
@@ -4381,14 +4453,14 @@ const reabrirMain = async () => {
                               "
                               :disabled="
                                 !!(
-                                  loadingDrive ||
+                                  isProcessBusy ||
                                   !isOnlineDrive ||
                                   (filaEliminandoId &&
                                     filaEliminandoId !== file.id)
                                 )
                               "
                               :class="{
-                                disabled: loadingDrive || !isOnlineDrive,
+                                disabled: isProcessBusy || !isOnlineDrive,
                               }"
                             >
                               <div
@@ -4888,7 +4960,7 @@ const reabrirMain = async () => {
               : 'btn-primary'
           "
           @click="procesarEliminacionCon2FA"
-          :disabled="verificando2FA || input2FACode.length < 6"
+          :disabled="isProcessBusy || input2FACode.length < 6"
         >
           {{ modalSeguridadBotonLabel }}
         </button>
@@ -5968,6 +6040,37 @@ const reabrirMain = async () => {
   }
 }
 /* --- ESTILOS DEL MODAL --- */
+.security-block-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  animation: securityPulse 2s infinite ease-in-out;
+  cursor: help;
+  user-select: none;
+}
+
+@keyframes securityPulse {
+  0% { opacity: 0.8; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.02); box-shadow: 0 0 10px rgba(239, 68, 68, 0.2); }
+  100% { opacity: 0.8; transform: scale(1); }
+}
+
+.fade-enter-active, .fade-leave-active {
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+.fade-enter-from, .fade-leave-to {
+  opacity: 0;
+  transform: translateY(-5px);
+}
+
 .modal-overlay {
   position: fixed;
   inset: 0;
