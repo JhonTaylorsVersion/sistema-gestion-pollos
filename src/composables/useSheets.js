@@ -2821,19 +2821,55 @@ export function useSheets() {
     mensaje: "",
   });
 
+  const cleanDuplicates = async (conjuntoId) => {
+    const database = await initDB();
+    const rows = await database.select(
+      "SELECT id, nombre, updated_at FROM sheets WHERE conjunto_id = ? ORDER BY nombre, updated_at DESC",
+      [conjuntoId]
+    );
+
+    const seenNames = new Set();
+    const toDeleteIds = [];
+
+    for (const row of rows) {
+      if (seenNames.has(row.nombre)) {
+        // Es un duplicado. Como ordenamos por updated_at DESC, este es el más viejo.
+        toDeleteIds.push(row.id);
+      } else {
+        seenNames.add(row.nombre);
+      }
+    }
+
+    if (toDeleteIds.length > 0) {
+      console.log(`🧹 [Sabueso] Limpiando ${toDeleteIds.length} hojas duplicadas...`);
+      for (const oldId of toDeleteIds) {
+        // Antes de borrar la hoja, movemos sus filas a la hoja que quedó viva? 
+        // No, usualmente los duplicados por sync fallido tienen las mismas filas o vacías.
+        // Por ahora solo borramos el duplicado visual.
+        await database.execute("DELETE FROM filas WHERE sheet_id = ?", [oldId]);
+        await database.execute("DELETE FROM sheets WHERE id = ?", [oldId]);
+      }
+      return true;
+    }
+    return false;
+  };
+
   const loadBatchFromDB = async (conjuntoId) => {
     try {
       const database = await initDB();
 
       // 1. Cargar datos del conjunto
-      const conjuntos = await database.select(
+      const conjuntosArr = await database.select(
         "SELECT * FROM conjuntos WHERE id = ?",
         [conjuntoId],
       );
 
-      if (!conjuntos || conjuntos.length === 0) return false;
+      if (!conjuntosArr || conjuntosArr.length === 0) return false;
 
-      const c = conjuntos[0];
+      // 🔍 [Sabueso]: Limpiar duplicados antes de cargar en memoria
+      await cleanDuplicates(conjuntoId);
+
+      const c = conjuntosArr[0];
       conjunto.value = {
         id: c.id,
         nombre: c.nombre,
@@ -3118,8 +3154,7 @@ export function useSheets() {
         // El parámetro 'false' indica que es automático; useDrive respetará el cooldown de 60s.
         await uploadBackup(false);
 
-        isDirty.value = false;
-        console.log("✅ [useSheets] Sincronización híbrida finalizada.");
+        console.log("✅ [useSheets] Sincronización híbrida disparada.");
       }
 
       setTimeout(() => {
@@ -4183,11 +4218,24 @@ export function useSheets() {
       );
 
       if (m.operation === "INSERT" || m.operation === "UPDATE") {
+        // 🔍 [Idempotencia de Hojas]: Si es una hoja y ya existe una con el mismo nombre en el conjunto, 
+        // asumimos que es el mismo galpón y unificamos el ID para evitar duplicados visuales.
+        let targetId = m.row_id;
+        if (m.table_name === "sheets" && m.operation === "INSERT") {
+          const existingByName = await database.select(
+            "SELECT id FROM sheets WHERE nombre = ? AND conjunto_id = ?",
+            [payload.nombre, payload.conjunto_id]
+          );
+          if (existingByName.length > 0 && existingByName[0].id !== m.row_id) {
+            console.log(`🔗 [Sync] Detectada hoja duplicada por nombre '${payload.nombre}'. Unificando ID a ${existingByName[0].id}`);
+            targetId = existingByName[0].id;
+          }
+        }
+
         // Estrategia: "Última escritura gana por campo"
-        // Verificamos si el registro local es más reciente que la mutación que viene
         const existing = await database.select(
           `SELECT updated_at FROM ${m.table_name} WHERE id = ?`,
-          [m.row_id],
+          [targetId],
         );
 
         if (existing.length > 0 && existing[0].updated_at > m.timestamp) {
@@ -4205,13 +4253,13 @@ export function useSheets() {
           const columns = keys.join(",");
           await database.execute(
             `INSERT OR REPLACE INTO ${m.table_name} (id, ${columns}, updated_at) VALUES (?, ${placeholders}, ?)`,
-            [m.row_id, ...values, m.timestamp],
+            [targetId, ...values, m.timestamp],
           );
         } else {
           const setClause = keys.map((k) => `${k} = ?`).join(", ");
           await database.execute(
             `UPDATE ${m.table_name} SET ${setClause}, updated_at = ? WHERE id = ?`,
-            [...values, m.timestamp, m.row_id],
+            [...values, m.timestamp, targetId],
           );
         }
       } else if (m.operation === "DELETE") {

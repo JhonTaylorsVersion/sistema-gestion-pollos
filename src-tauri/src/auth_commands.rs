@@ -44,7 +44,7 @@ pub fn save_master_key_file(path: String, content: Vec<u8>) -> Result<(), String
 }
 
 #[tauri::command]
-pub fn validate_master_key_file(file_content: Vec<u8>, stored_codes: Vec<String>) -> Result<bool, String> {
+pub fn validate_master_key_file(file_content: Vec<u8>) -> Result<Vec<String>, String> {
 
     if file_content.len() < 12 {
         return Err("Archivo de llave inválido o corrupto".to_string());
@@ -63,15 +63,7 @@ pub fn validate_master_key_file(file_content: Vec<u8>, stored_codes: Vec<String>
     let decrypted_codes: Vec<String> = serde_json::from_slice(&plaintext_bytes)
         .map_err(|_| "Error al leer la estructura de la llave".to_string())?;
     
-    // Validar si al menos uno de los códigos almacenados está en la llave
-    // (Esto asegura que la llave es actual)
-    for code in decrypted_codes {
-        if stored_codes.contains(&code) {
-            return Ok(true);
-        }
-    }
-    
-    Ok(false)
+    Ok(decrypted_codes)
 }
 
 #[tauri::command]
