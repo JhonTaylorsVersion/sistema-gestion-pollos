@@ -29,7 +29,6 @@ export function useSheets() {
     isDatabaseCorrupted,
   } = useDrive();
 
-
   const initDB = async () => {
     try {
       if (!db) {
@@ -40,7 +39,9 @@ export function useSheets() {
       const errorStr = String(e).toLowerCase();
       console.error("🚨 [useSheets] Error en initDB:", e);
       if (errorStr.includes("malformed") || errorStr.includes("code 11")) {
-        console.error("🧨 BASE DE DATOS CORRUPTA DETECTADA EN VENTANA PRINCIPAL");
+        console.error(
+          "🧨 BASE DE DATOS CORRUPTA DETECTADA EN VENTANA PRINCIPAL",
+        );
         emit("db-corruption-detected", { error: errorStr });
       }
       throw e;
@@ -58,7 +59,11 @@ export function useSheets() {
       )
     `);
     // Migración: Asegurar updated_at en conjuntos
-    try { await db.execute("ALTER TABLE conjuntos ADD COLUMN updated_at INTEGER DEFAULT (strftime('%s', 'now'))"); } catch(e) {}
+    try {
+      await db.execute(
+        "ALTER TABLE conjuntos ADD COLUMN updated_at INTEGER DEFAULT (strftime('%s', 'now'))",
+      );
+    } catch (e) {}
 
     await db.execute(`
       CREATE TABLE IF NOT EXISTS sheets (
@@ -76,7 +81,11 @@ export function useSheets() {
       )
     `);
     // Migración: Asegurar updated_at en sheets
-    try { await db.execute("ALTER TABLE sheets ADD COLUMN updated_at INTEGER DEFAULT (strftime('%s', 'now'))"); } catch(e) {}
+    try {
+      await db.execute(
+        "ALTER TABLE sheets ADD COLUMN updated_at INTEGER DEFAULT (strftime('%s', 'now'))",
+      );
+    } catch (e) {}
 
     //  NIVELL 3: Cambiamos ID de filas a TEXT para UUIDs universales
     // Nota: Si la tabla ya existía como INTEGER, ALTER TABLE no funcionará para cambiar la PK.
@@ -104,10 +113,17 @@ export function useSheets() {
         )
       `);
     } catch (e) {
-      console.warn("⚠️ Error al crear tabla filas (posible conflicto de esquema):", e);
+      console.warn(
+        "⚠️ Error al crear tabla filas (posible conflicto de esquema):",
+        e,
+      );
     }
     // Migración: Asegurar updated_at en filas
-    try { await db.execute("ALTER TABLE filas ADD COLUMN updated_at INTEGER DEFAULT (strftime('%s', 'now'))"); } catch(e) {}
+    try {
+      await db.execute(
+        "ALTER TABLE filas ADD COLUMN updated_at INTEGER DEFAULT (strftime('%s', 'now'))",
+      );
+    } catch (e) {}
 
     // 2. Infraestructura de Sincronización (Nivel 3)
     await db.execute(`
@@ -130,11 +146,15 @@ export function useSheets() {
       )
     `);
 
-    await db.execute(`CREATE TABLE IF NOT EXISTS app_config (key TEXT PRIMARY KEY, value TEXT)`);
+    await db.execute(
+      `CREATE TABLE IF NOT EXISTS app_config (key TEXT PRIMARY KEY, value TEXT)`,
+    );
 
     // 3. TRIGGERS DE CAPTURA AUTOMÁTICA (Motor de Deltas)
     // Usamos app_config(sync_mute) para evitar bucles infinitos al aplicar cambios de la nube.
-    await db.execute(`INSERT OR IGNORE INTO app_config (key, value) VALUES ('sync_mute', '0')`);
+    await db.execute(
+      `INSERT OR IGNORE INTO app_config (key, value) VALUES ('sync_mute', '0')`,
+    );
 
     // Triggers para 'conjuntos'
     await db.execute(`
@@ -269,7 +289,6 @@ export function useSheets() {
     icono: null,
   });
 
-
   let confirmResolve = null;
 
   const abrirConfirmacion = (
@@ -345,7 +364,6 @@ export function useSheets() {
       );
     });
   });
-
 
   const modalExportacion = ref({
     visible: false,
@@ -430,7 +448,20 @@ export function useSheets() {
   const crearIdLote = (numero = 1) => {
     const fecha = new Date();
     const year = fecha.getFullYear();
-    const meses = ["ENE", "FEB", "MAR", "ABR", "MAY", "JUN", "JUL", "AGO", "SEP", "OCT", "NOV", "DIC"];
+    const meses = [
+      "ENE",
+      "FEB",
+      "MAR",
+      "ABR",
+      "MAY",
+      "JUN",
+      "JUL",
+      "AGO",
+      "SEP",
+      "OCT",
+      "NOV",
+      "DIC",
+    ];
     const mes = meses[fecha.getMonth()];
     const numeroFormateado = String(numero).padStart(2, "0");
     const uniquePart = crypto.randomUUID().split("-")[0].toUpperCase();
@@ -448,7 +479,20 @@ export function useSheets() {
   const crearId = (numero) => {
     const fecha = new Date();
     const year = fecha.getFullYear();
-    const meses = ["ENE", "FEB", "MAR", "ABR", "MAY", "JUN", "JUL", "AGO", "SEP", "OCT", "NOV", "DIC"];
+    const meses = [
+      "ENE",
+      "FEB",
+      "MAR",
+      "ABR",
+      "MAY",
+      "JUN",
+      "JUL",
+      "AGO",
+      "SEP",
+      "OCT",
+      "NOV",
+      "DIC",
+    ];
     const mes = meses[fecha.getMonth()];
     const numeroFormateado = String(numero).padStart(2, "0");
     const uniquePart = crypto.randomUUID().split("-")[0].toUpperCase();
@@ -2744,10 +2788,7 @@ export function useSheets() {
           await revealItemInDir(rutaDestino);
         } catch (err) {
           console.error("Error al abrir la carpeta:", err);
-          mostrarMensaje(
-            "Error",
-            "No se pudo abrir la ubicación del archivo.",
-          );
+          mostrarMensaje("Error", "No se pudo abrir la ubicación del archivo.");
         }
       }
     } catch (error) {
@@ -2982,7 +3023,7 @@ export function useSheets() {
         isInternalAction.value = true;
         recalcularSheet(s);
         isInternalAction.value = false;
-        
+
         await database.execute(
           `INSERT OR REPLACE INTO sheets
           (id, conjunto_id, nombre, granja, lote, galpon, fecha_ingreso, procedencia, cantidad)
@@ -3032,25 +3073,31 @@ export function useSheets() {
       }
 
       // 3. RECONCILIACIÓN: Eliminar de la base de datos galpones que ya no existen en el array
-      const idsActuales = sheets.value.map(s => s.id);
+      const idsActuales = sheets.value.map((s) => s.id);
       if (idsActuales.length > 0) {
         // Buscamos todos los galpones de este conjunto en la DB
         const dbSheets = await database.select(
           "SELECT id FROM sheets WHERE conjunto_id = ?",
-          [conjunto.value.id]
+          [conjunto.value.id],
         );
-        
+
         for (const dbRow of dbSheets) {
           // Si el ID de la base de datos NO está en nuestra lista de memoria, lo borramos
           if (!idsActuales.includes(dbRow.id)) {
             console.log(`🗑️ Eliminando galpón huérfano de la DB: ${dbRow.id}`);
-            await database.execute(`DELETE FROM filas WHERE sheet_id = ?`, [dbRow.id]);
-            await database.execute(`DELETE FROM sheets WHERE id = ?`, [dbRow.id]);
+            await database.execute(`DELETE FROM filas WHERE sheet_id = ?`, [
+              dbRow.id,
+            ]);
+            await database.execute(`DELETE FROM sheets WHERE id = ?`, [
+              dbRow.id,
+            ]);
           }
         }
       }
 
-      console.log(`✅ Sincronización completa con éxito para ${sheets.value.length} galpones.`);
+      console.log(
+        `✅ Sincronización completa con éxito para ${sheets.value.length} galpones.`,
+      );
 
       // Actualizamos el estado de éxito
       estadoGuardado.value = {
@@ -3066,7 +3113,7 @@ export function useSheets() {
 
         // 1. Sincronización Delta (Rápida, Nivel 3)
         await syncDelta();
-        
+
         // 2. Intento de Backup Completo (Seguridad, Nivel 2)
         // El parámetro 'false' indica que es automático; useDrive respetará el cooldown de 60s.
         await uploadBackup(false);
@@ -3085,7 +3132,9 @@ export function useSheets() {
       console.error("🚨 [useSheets] Error al guardar en SQLite:", error);
 
       if (errorStr.includes("malformed") || errorStr.includes("code 11")) {
-        console.error("🧨 CRÍTICO: El guardado falló por base de datos corrupta (Malformed).");
+        console.error(
+          "🧨 CRÍTICO: El guardado falló por base de datos corrupta (Malformed).",
+        );
         emit("db-corruption-detected", { source: "autosave", error: errorStr });
       }
 
@@ -3790,7 +3839,7 @@ export function useSheets() {
       await initDB();
       // 🔥 AUTO-RESCATE: Cargamos el último lote guardado al arrancar
       await loadLatestBatchFromDB();
-      
+
       // 🚀 NIVEL 3: Sincronización Delta al arrancar
       await syncDelta();
     } catch (error) {
@@ -4119,25 +4168,32 @@ export function useSheets() {
 
   const applyRemoteMutation = async (m) => {
     const database = await initDB();
-    const payload = typeof m.payload === "string" ? JSON.parse(m.payload) : m.payload;
+    const payload =
+      typeof m.payload === "string" ? JSON.parse(m.payload) : m.payload;
 
     // Marcamos que esta es una acción de sincronización para evitar disparar Triggers de subida infinitos
     isInternalAction.value = true;
-    await database.execute("UPDATE app_config SET value = '1' WHERE key = 'sync_mute'");
+    await database.execute(
+      "UPDATE app_config SET value = '1' WHERE key = 'sync_mute'",
+    );
 
     try {
-      console.log(`☁️ Aplicando mutación remota: ${m.operation} en ${m.table_name}[${m.row_id}]`);
+      console.log(
+        `☁️ Aplicando mutación remota: ${m.operation} en ${m.table_name}[${m.row_id}]`,
+      );
 
       if (m.operation === "INSERT" || m.operation === "UPDATE") {
         // Estrategia: "Última escritura gana por campo"
         // Verificamos si el registro local es más reciente que la mutación que viene
         const existing = await database.select(
           `SELECT updated_at FROM ${m.table_name} WHERE id = ?`,
-          [m.row_id]
+          [m.row_id],
         );
 
         if (existing.length > 0 && existing[0].updated_at > m.timestamp) {
-          console.log(`⚠️ Mutación ignorada: El registro local es más reciente.`);
+          console.log(
+            `⚠️ Mutación ignorada: El registro local es más reciente.`,
+          );
           return;
         }
 
@@ -4149,20 +4205,24 @@ export function useSheets() {
           const columns = keys.join(",");
           await database.execute(
             `INSERT OR REPLACE INTO ${m.table_name} (id, ${columns}, updated_at) VALUES (?, ${placeholders}, ?)`,
-            [m.row_id, ...values, m.timestamp]
+            [m.row_id, ...values, m.timestamp],
           );
         } else {
-          const setClause = keys.map(k => `${k} = ?`).join(", ");
+          const setClause = keys.map((k) => `${k} = ?`).join(", ");
           await database.execute(
             `UPDATE ${m.table_name} SET ${setClause}, updated_at = ? WHERE id = ?`,
-            [...values, m.timestamp, m.row_id]
+            [...values, m.timestamp, m.row_id],
           );
         }
       } else if (m.operation === "DELETE") {
-        await database.execute(`DELETE FROM ${m.table_name} WHERE id = ?`, [m.row_id]);
+        await database.execute(`DELETE FROM ${m.table_name} WHERE id = ?`, [
+          m.row_id,
+        ]);
       }
     } finally {
-      await database.execute("UPDATE app_config SET value = '0' WHERE key = 'sync_mute'");
+      await database.execute(
+        "UPDATE app_config SET value = '0' WHERE key = 'sync_mute'",
+      );
       isInternalAction.value = false;
     }
   };
@@ -4171,7 +4231,7 @@ export function useSheets() {
     const database = await initDB();
     const rows = await database.select(
       "SELECT 1 FROM processed_deltas WHERE file_id = ?",
-      [fileId]
+      [fileId],
     );
     return rows.length > 0;
   };
@@ -4180,15 +4240,17 @@ export function useSheets() {
     const database = await initDB();
     await database.execute(
       "INSERT OR IGNORE INTO processed_deltas (file_id) VALUES (?)",
-      [fileId]
+      [fileId],
     );
   };
 
   const syncDelta = async () => {
     const { pushDeltas, pullDeltas, isOnline, isAuthenticated } = useDrive();
-    
+
     if (!isOnline.value || !isAuthenticated.value) {
-      console.warn("☁️ [useSheets] Imposible sincronizar: Offline o no autenticado.");
+      console.warn(
+        "☁️ [useSheets] Imposible sincronizar: Offline o no autenticado.",
+      );
       return;
     }
 
@@ -4205,12 +4267,12 @@ export function useSheets() {
           console.log("🔄 [useSheets] Recargando lote tras PULL de Drive.");
           await loadBatchFromDB(conjunto.value.id);
         }
-      }
+      },
     );
 
     // 2. PUSH: Subir cambios locales pendientes
     await pushDeltas(getPendingMutations, markMutationsSynced);
-    
+
     console.log("✅ [useSheets] Sincronización Delta finalizada.");
   };
 
@@ -4326,5 +4388,3 @@ export function useSheets() {
     isDatabaseCorrupted,
   };
 }
-
-

@@ -1,11 +1,18 @@
 <script setup>
-import { ref, onMounted, onUnmounted, nextTick, watch, watchEffect, computed } from "vue";
+import {
+  ref,
+  onMounted,
+  onUnmounted,
+  nextTick,
+  watch,
+  watchEffect,
+  computed,
+} from "vue";
 import { useSheets } from "./composables/useSheets";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import SyncIcon from "./components/SyncIcon.vue";
 
 const isForceClosing = ref(false);
-
 
 const handleConfigClick = async () => {
   // El panel ahora se abre inmediatamente. La sincronización puede ocurrir en segundo plano.
@@ -237,7 +244,6 @@ const syncTooltip = computed(() => {
   return "Sincronizado con Google Drive";
 });
 
-
 onMounted(async () => {
   setTableWrapperRef(tableWrapperRef);
 
@@ -427,11 +433,11 @@ onMounted(async () => {
       <div class="tabs-actions-right">
         <!-- INDICADOR DE SINCRONIZACIÓN -->
         <div class="sync-status">
-          <SyncIcon 
-            :status="syncStatus" 
-            :size="22" 
-            show-tooltip 
-            :tooltip-text="syncTooltip" 
+          <SyncIcon
+            :status="syncStatus"
+            :size="22"
+            show-tooltip
+            :tooltip-text="syncTooltip"
           />
         </div>
 
@@ -531,7 +537,8 @@ onMounted(async () => {
         <div class="title-block">
           <h1>CONTROL PARA POLLOS DE CARNE</h1>
           <p class="sheet-id">
-            <strong>Código Lote:</strong> {{ formatearIdParaUsuario(conjunto.id) }}
+            <strong>Código Lote:</strong>
+            {{ formatearIdParaUsuario(conjunto.id) }}
           </p>
           <p class="sheet-id">
             <strong>Código Galpón:</strong>
@@ -1613,7 +1620,8 @@ onMounted(async () => {
         <div class="title-block">
           <h1>ESTADÍSTICAS GENERALES</h1>
           <p class="sheet-id">
-            <strong>Código Lote:</strong> {{ formatearIdParaUsuario(conjunto.id) }}
+            <strong>Código Lote:</strong>
+            {{ formatearIdParaUsuario(conjunto.id) }}
           </p>
           <p class="sheet-id"><strong>Nombre:</strong> {{ conjunto.nombre }}</p>
           <p class="sheet-id">
@@ -1704,20 +1712,22 @@ onMounted(async () => {
       >
         <!-- ICONO DINÁMICO SEGÚN EL TEXTO O ESTADO -->
         <SyncIcon
-          v-if="modalMensaje.titulo.includes('línea') || modalMensaje.titulo.includes('nube')"
+          v-if="
+            modalMensaje.titulo.includes('línea') ||
+            modalMensaje.titulo.includes('nube')
+          "
           status="loading"
           :size="56"
         />
         <SyncIcon
-          v-else-if="modalMensaje.titulo.includes('éxito') || modalMensaje.titulo.includes('asegurados')"
+          v-else-if="
+            modalMensaje.titulo.includes('éxito') ||
+            modalMensaje.titulo.includes('asegurados')
+          "
           status="success"
           :size="56"
         />
-        <SyncIcon
-          v-else
-          status="pending"
-          :size="56"
-        />
+        <SyncIcon v-else status="pending" :size="56" />
 
         <p style="font-weight: 500; color: #666; font-size: 1.1em">
           {{ modalMensaje.texto }}

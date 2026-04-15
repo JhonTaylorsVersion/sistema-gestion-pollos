@@ -13,7 +13,6 @@
     "core:window:allow-set-always-on-top",
     "core:webview:allow-create-webview-window",
 
-
     "sql:default",
     "sql:allow-execute",
 
@@ -51,6 +50,5 @@
       "identifier": "http:allow-fetch-send",
       "allow": [{ "url": "https://*.googleapis.com/*" }]
     }
-
   ]
 }

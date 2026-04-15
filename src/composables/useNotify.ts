@@ -1,6 +1,6 @@
-import { ref } from 'vue';
+import { ref } from "vue";
 
-export type ToastType = 'success' | 'error' | 'info';
+export type ToastType = "success" | "error" | "info";
 
 interface ToastState {
   show: boolean;
@@ -10,8 +10,8 @@ interface ToastState {
 
 const toast = ref<ToastState>({
   show: false,
-  message: '',
-  type: 'success',
+  message: "",
+  type: "success",
 });
 
 const draggingToast = ref(false);
@@ -34,17 +34,17 @@ export function useNotify() {
   const handleToastMouseUp = () => {
     if (!draggingToast.value) return;
     draggingToast.value = false;
-    
+
     if (Math.abs(toastY.value) > 60) {
       toast.value.show = false;
     }
-    
+
     toastY.value = 0;
     document.removeEventListener("mousemove", handleToastMouseMove);
     document.removeEventListener("mouseup", handleToastMouseUp);
   };
 
-  const mostrarToast = (message: string, type: ToastType = 'success') => {
+  const mostrarToast = (message: string, type: ToastType = "success") => {
     toast.value.message = message;
     toast.value.type = type;
     toast.value.show = true;

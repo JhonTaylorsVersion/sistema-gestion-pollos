@@ -9,28 +9,28 @@ const props = defineProps({
   // 'not-linked' | 'offline' | 'loading' | 'error' | 'pending' | 'success'
   status: {
     type: String,
-    required: true
+    required: true,
   },
   size: {
     type: [Number, String],
-    default: 22
+    default: 22,
   },
   showTooltip: {
     type: Boolean,
-    default: false
+    default: false,
   },
   tooltipText: {
     type: String,
-    default: ""
-  }
+    default: "",
+  },
 });
 
 const sizePx = computed(() => `${props.size}px`);
 </script>
 
 <template>
-  <div 
-    class="sync-icon-container" 
+  <div
+    class="sync-icon-container"
     :style="{ width: sizePx, height: sizePx }"
     :title="showTooltip ? tooltipText : null"
   >
@@ -43,14 +43,17 @@ const sizePx = computed(() => `${props.size}px`);
       xmlns="http://www.w3.org/2000/svg"
       :style="{ width: sizePx, height: sizePx }"
     >
-      <path 
-        d="M12.01 1.485c-2.082 0-3.754.02-3.743.047.01.02 1.708 3.001 3.774 6.62l3.76 6.574h3.76c2.081 0 3.753-.02 3.742-.047-.005-.02-1.708-3.001-3.775-6.62l-3.76-6.574zm-4.76 1.73a789.828 789.861 0 0 0-3.63 6.319L0 15.868l1.89 3.298 1.885 3.297 3.62-6.335 3.618-6.33-1.88-3.287C8.1 4.704 7.255 3.22 7.25 3.214zm2.259 12.653-.203.348c-.114.198-.96 1.672-1.88 3.287a423.93 423.948 0 0 1-1.698 2.97c-.01.026 3.24.042 7.222.042h7.244l1.796-3.157c.992-1.734 1.85-3.23 1.906-3.323l.104-.167h-7.249z" 
+      <path
+        d="M12.01 1.485c-2.082 0-3.754.02-3.743.047.01.02 1.708 3.001 3.774 6.62l3.76 6.574h3.76c2.081 0 3.753-.02 3.742-.047-.005-.02-1.708-3.001-3.775-6.62l-3.76-6.574zm-4.76 1.73a789.828 789.861 0 0 0-3.63 6.319L0 15.868l1.89 3.298 1.885 3.297 3.62-6.335 3.618-6.33-1.88-3.287C8.1 4.704 7.255 3.22 7.25 3.214zm2.259 12.653-.203.348c-.114.198-.96 1.672-1.88 3.287a423.93 423.948 0 0 1-1.698 2.97c-.01.026 3.24.042 7.222.042h7.244l1.796-3.157c.992-1.734 1.85-3.23 1.906-3.323l.104-.167h-7.249z"
         fill="#94a3b8"
       />
-      <line 
-        x1="2" y1="2" x2="22" y2="22" 
-        stroke="#64748b" 
-        :stroke-width="size > 40 ? 2 : 2.5" 
+      <line
+        x1="2"
+        y1="2"
+        x2="22"
+        y2="22"
+        stroke="#64748b"
+        :stroke-width="size > 40 ? 2 : 2.5"
         stroke-linecap="round"
       />
     </svg>
@@ -65,10 +68,12 @@ const sizePx = computed(() => `${props.size}px`);
       stroke-width="2.5"
       stroke-linecap="round"
       stroke-linejoin="round"
-      style="color: #64748b;"
+      style="color: #64748b"
       :style="{ width: sizePx, height: sizePx }"
     >
-      <path d="M22.61 16.95A5 5 0 0 0 18 10h-1.26a8 8 0 0 0-7.05-6M5 5a8 8 0 0 0 4 15h9a5 5 0 0 0 1.7-.3"></path>
+      <path
+        d="M22.61 16.95A5 5 0 0 0 18 10h-1.26a8 8 0 0 0-7.05-6M5 5a8 8 0 0 0 4 15h9a5 5 0 0 0 1.7-.3"
+      ></path>
       <line x1="1" y1="1" x2="23" y2="23"></line>
     </svg>
 
@@ -151,7 +156,11 @@ const sizePx = computed(() => `${props.size}px`);
 }
 
 @keyframes sync-spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 </style>

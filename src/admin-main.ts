@@ -4,7 +4,7 @@ import "./style.css";
 
 // Bloquear menú contextual (clic derecho) solo en producción
 if (!import.meta.env.DEV) {
-  document.addEventListener('contextmenu', e => e.preventDefault());
+  document.addEventListener("contextmenu", (e) => e.preventDefault());
 }
 
 createApp(AdminApp).mount("#app");

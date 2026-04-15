@@ -200,7 +200,7 @@ const initDB = async (): Promise<Database> => {
   dbPromise = (async () => {
     try {
       const connection = await Database.load("sqlite:pollos.db");
-      
+
       // 1. Tablas Base y Migraciones (Consistente con useSheets / NIVEL 3)
       await connection.execute(`
         CREATE TABLE IF NOT EXISTS conjuntos (
@@ -210,7 +210,11 @@ const initDB = async (): Promise<Database> => {
           updated_at INTEGER DEFAULT (strftime('%s', 'now'))
         )
       `);
-      try { await connection.execute("ALTER TABLE conjuntos ADD COLUMN updated_at INTEGER DEFAULT (strftime('%s', 'now'))"); } catch(e) {}
+      try {
+        await connection.execute(
+          "ALTER TABLE conjuntos ADD COLUMN updated_at INTEGER DEFAULT (strftime('%s', 'now'))",
+        );
+      } catch (e) {}
 
       await connection.execute(`
         CREATE TABLE IF NOT EXISTS sheets (
@@ -227,7 +231,11 @@ const initDB = async (): Promise<Database> => {
           FOREIGN KEY (conjunto_id) REFERENCES conjuntos(id)
         )
       `);
-      try { await connection.execute("ALTER TABLE sheets ADD COLUMN updated_at INTEGER DEFAULT (strftime('%s', 'now'))"); } catch(e) {}
+      try {
+        await connection.execute(
+          "ALTER TABLE sheets ADD COLUMN updated_at INTEGER DEFAULT (strftime('%s', 'now'))",
+        );
+      } catch (e) {}
 
       await connection.execute(`
         CREATE TABLE IF NOT EXISTS filas (
@@ -250,7 +258,11 @@ const initDB = async (): Promise<Database> => {
           FOREIGN KEY (sheet_id) REFERENCES sheets(id)
         )
       `);
-      try { await connection.execute("ALTER TABLE filas ADD COLUMN updated_at INTEGER DEFAULT (strftime('%s', 'now'))"); } catch(e) {}
+      try {
+        await connection.execute(
+          "ALTER TABLE filas ADD COLUMN updated_at INTEGER DEFAULT (strftime('%s', 'now'))",
+        );
+      } catch (e) {}
 
       // 2. Infraestructura de Sincronización (Nivel 3)
       await connection.execute(`
@@ -273,29 +285,45 @@ const initDB = async (): Promise<Database> => {
         )
       `);
 
-      await connection.execute(`CREATE TABLE IF NOT EXISTS app_config (key TEXT PRIMARY KEY, value TEXT)`);
-      await connection.execute(`INSERT OR IGNORE INTO app_config (key, value) VALUES ('sync_mute', '0')`);
+      await connection.execute(
+        `CREATE TABLE IF NOT EXISTS app_config (key TEXT PRIMARY KEY, value TEXT)`,
+      );
+      await connection.execute(
+        `INSERT OR IGNORE INTO app_config (key, value) VALUES ('sync_mute', '0')`,
+      );
 
       // 3. TRIGGERS (Replicados para asegurar que cambios en Admin también se sincronicen)
       const triggerSpecs = [
-        { t: 'conjuntos', ops: ['INSERT', 'UPDATE', 'DELETE'], p: "json_object('nombre', NEW.nombre, 'descripcion', NEW.descripcion)" },
-        { t: 'sheets', ops: ['INSERT', 'UPDATE', 'DELETE'], p: "json_object('conjunto_id', NEW.conjunto_id, 'nombre', NEW.nombre, 'granja', NEW.granja, 'lote', NEW.lote, 'galpon', NEW.galpon, 'fecha_ingreso', NEW.fecha_ingreso, 'procedencia', NEW.procedencia, 'cantidad', NEW.cantidad)" },
-        { t: 'filas', ops: ['INSERT', 'UPDATE', 'DELETE'], p: "json_object('sheet_id', NEW.sheet_id, 'dia', NEW.dia, 'semana', NEW.semana, 'fecha', NEW.fecha, 'alimento_cant', NEW.alimento_cant, 'alimento_diario', NEW.alimento_diario, 'medicina', NEW.medicina, 'gas_diario', NEW.gas_diario, 'mort_diaria', NEW.mort_diaria, 'observacion', NEW.observacion)" }
+        {
+          t: "conjuntos",
+          ops: ["INSERT", "UPDATE", "DELETE"],
+          p: "json_object('nombre', NEW.nombre, 'descripcion', NEW.descripcion)",
+        },
+        {
+          t: "sheets",
+          ops: ["INSERT", "UPDATE", "DELETE"],
+          p: "json_object('conjunto_id', NEW.conjunto_id, 'nombre', NEW.nombre, 'granja', NEW.granja, 'lote', NEW.lote, 'galpon', NEW.galpon, 'fecha_ingreso', NEW.fecha_ingreso, 'procedencia', NEW.procedencia, 'cantidad', NEW.cantidad)",
+        },
+        {
+          t: "filas",
+          ops: ["INSERT", "UPDATE", "DELETE"],
+          p: "json_object('sheet_id', NEW.sheet_id, 'dia', NEW.dia, 'semana', NEW.semana, 'fecha', NEW.fecha, 'alimento_cant', NEW.alimento_cant, 'alimento_diario', NEW.alimento_diario, 'medicina', NEW.medicina, 'gas_diario', NEW.gas_diario, 'mort_diaria', NEW.mort_diaria, 'observacion', NEW.observacion)",
+        },
       ];
 
       for (const spec of triggerSpecs) {
         for (const op of spec.ops) {
           const suffix = op.toLowerCase().substring(0, 3);
-          const payload = op === 'DELETE' ? 'NULL' : spec.p;
-          const ref = op === 'DELETE' ? 'OLD' : 'NEW';
-          
+          const payload = op === "DELETE" ? "NULL" : spec.p;
+          const ref = op === "DELETE" ? "OLD" : "NEW";
+
           await connection.execute(`
             CREATE TRIGGER IF NOT EXISTS trg_sync_${spec.t}_${suffix} AFTER ${op} ON ${spec.t}
             WHEN (SELECT value FROM app_config WHERE key = 'sync_mute') = '0'
             BEGIN
               INSERT INTO sync_mutations (table_name, row_id, operation, payload)
               VALUES ('${spec.t}', ${ref}.id, '${op}', ${payload});
-              ${op === 'UPDATE' ? `UPDATE ${spec.t} SET updated_at = (strftime('%s', 'now')) WHERE id = NEW.id;` : ''}
+              ${op === "UPDATE" ? `UPDATE ${spec.t} SET updated_at = (strftime('%s', 'now')) WHERE id = NEW.id;` : ""}
             END;
           `);
         }
@@ -307,9 +335,11 @@ const initDB = async (): Promise<Database> => {
       dbPromise = null;
       const errorStr = String(e).toLowerCase();
       console.error("🚨 [initDB ADMIN] Error crítico detectado:", e);
-      
+
       if (errorStr.includes("malformed") || errorStr.includes("code 11")) {
-        console.warn("🛡️ [VALLA] ¡Corrupción detectada en initDB! databaseMalformed = true");
+        console.warn(
+          "🛡️ [VALLA] ¡Corrupción detectada en initDB! databaseMalformed = true",
+        );
         databaseMalformed.value = true;
       }
       throw e;
@@ -332,7 +362,8 @@ const formatearIdParaUsuario = (id: string | null | undefined) => {
 
 const formatearNombreBackup = (nombre: string) => {
   if (!nombre) return "Respaldo";
-  if (nombre === "Llave_Maestra_Seguridad.key") return "Llave de Seguridad (Maestra)";
+  if (nombre === "Llave_Maestra_Seguridad.key")
+    return "Llave de Seguridad (Maestra)";
   if (nombre.startsWith("pollos_backup")) return "Copia de Seguridad (Cloud)";
   if (nombre.endsWith(".db")) return "Base de Datos";
   return nombre;
@@ -424,7 +455,8 @@ const repararBaseDeDatos = async () => {
       try {
         if (await exists(dbPath + "-wal")) await remove(dbPath + "-wal");
         if (await exists(dbPath + "-shm")) await remove(dbPath + "-shm");
-        if (await exists(dbPath + "-journal")) await remove(dbPath + "-journal");
+        if (await exists(dbPath + "-journal"))
+          await remove(dbPath + "-journal");
         console.log("🧹 Rastro de archivos temporales corruptos eliminado.");
       } catch (e) {
         console.warn("⚠️ No se pudieron limpiar temporales en reparación:", e);
@@ -560,9 +592,11 @@ const cargarConfig2FA = async () => {
   } catch (e) {
     const errorStr = String(e).toLowerCase();
     console.error("🚨 [Config2FA] Error al cargar configuración técnica:", e);
-    
+
     if (errorStr.includes("malformed") || errorStr.includes("code 11")) {
-      console.warn("🛡️ [VALLA] Corrupción detectada en Config2FA. Activando banner de reparación.");
+      console.warn(
+        "🛡️ [VALLA] Corrupción detectada en Config2FA. Activando banner de reparación.",
+      );
       databaseMalformed.value = true;
     }
   }
@@ -936,7 +970,9 @@ const cambiarSeccion = async (seccion: SeccionActiva) => {
     } catch (e) {
       const errorStr = String(e).toLowerCase();
       if (errorStr.includes("malformed") || errorStr.includes("code 11")) {
-        console.error("🧨 [Sabueso Agresivo] Corrupción detectada en tablas de datos.");
+        console.error(
+          "🧨 [Sabueso Agresivo] Corrupción detectada en tablas de datos.",
+        );
         databaseMalformed.value = true;
       }
     }
@@ -1005,6 +1041,13 @@ const cargarConjuntos = async () => {
   }
 };
 
+const prepararFiltroInteligente = (texto: string) => {
+  if (!texto) return "";
+  // Convierte "LOTE01:ABR-2026" en "%LOTE01%ABR-2026%"
+  // El '%' extra en el medio hace que SQLite ignore el hash generado.
+  return `%${texto.trim().replace(/:/g, "%")}%`;
+};
+
 const buscarRegistros = async () => {
   try {
     buscando.value = true;
@@ -1056,12 +1099,15 @@ const buscarRegistros = async () => {
 
     if (filtros.value.codigoGalpon.trim()) {
       query += ` AND s.id LIKE ? `;
-      params.push(`%${filtros.value.codigoGalpon.trim()}%`);
+      // Búsqueda inteligente para el ID del galpón
+      params.push(prepararFiltroInteligente(filtros.value.codigoGalpon));
     }
 
     if (filtros.value.codigoConjunto.trim()) {
       query += ` AND (c.id LIKE ? OR c.nombre LIKE ?) `;
-      params.push(`%${filtros.value.codigoConjunto.trim()}%`);
+      // Búsqueda inteligente para el ID del conjunto
+      params.push(prepararFiltroInteligente(filtros.value.codigoConjunto));
+      // Búsqueda normal para el nombre del conjunto
       params.push(`%${filtros.value.codigoConjunto.trim()}%`);
     }
 
@@ -1282,7 +1328,9 @@ const galponesFiltrados = computed(() => {
 
   return galponesLista.value.filter((g) => {
     const idUsuario = formatearIdParaUsuario(g.id).toLowerCase();
-    const idConjuntoUsuario = formatearIdParaUsuario(g.conjunto_id).toLowerCase();
+    const idConjuntoUsuario = formatearIdParaUsuario(
+      g.conjunto_id,
+    ).toLowerCase();
 
     return (
       g.id?.toLowerCase().includes(texto) ||
@@ -2343,7 +2391,9 @@ const syncStatus = computed(() => {
     return "success";
   })();
 
-  console.log(`📊 [SyncStatus] Calculado: ${status} | DB_Malformed: ${databaseMalformed.value} | Cloud_Error: ${syncErrorDrive.value}`);
+  console.log(
+    `📊 [SyncStatus] Calculado: ${status} | DB_Malformed: ${databaseMalformed.value} | Cloud_Error: ${syncErrorDrive.value}`,
+  );
   return status;
 });
 
@@ -2462,30 +2512,35 @@ const modernizarRespaldo = async (fileId: string) => {
     "Migración Profunda a V3",
     "Estás por modernizar una base de datos antigua al formato de 'Nivel 3 (Sincronización Delta)'.\n\nEste proceso:\n1. Convertirá IDs numéricos a UUIDs globales.\n2. Inyectará marcas de tiempo de alta precisión.\n3. Habilitará la sincronización inteligente entre dispositivos.\n\n Tus datos se mantendrán intactos. ¿Deseas continuar?",
     "Confirmar Migración",
-    "info"
+    "info",
   );
 
   if (!confirmed) return;
 
   try {
     mostrarToast("Iniciando migración profunda... Por favor espera.");
-    
+
     // 1. Restauramos el respaldo antiguo localmente primero (sin reiniciar la app)
     const successRestore = await restoreBackupDrive(fileId, true);
-    if (!successRestore) throw new Error("No se pudo descargar el respaldo para migrar.");
+    if (!successRestore)
+      throw new Error("No se pudo descargar el respaldo para migrar.");
 
     const database = await initDB();
 
     // 2. MIGRACIÓN PROFUNDA DE TABLA FILAS (Cambiar de INT a UUID)
     // Primero verificamos si ya es V3 inspeccionando el esquema real de la tabla 'filas'
-    const checkTable = await database.select<{sql: string}[]>("SELECT sql FROM sqlite_master WHERE name='filas'");
+    const checkTable = await database.select<{ sql: string }[]>(
+      "SELECT sql FROM sqlite_master WHERE name='filas'",
+    );
     if (checkTable[0]?.sql.toLowerCase().includes("text primary key")) {
-       mostrarToast("Este respaldo ya está en formato V3 o superior.");
-       return;
+      mostrarToast("Este respaldo ya está en formato V3 o superior.");
+      return;
     }
 
-    console.log("🛠️ Re-estructurando tabla filas para Nivel 3 (UUID Migration)...");
-    
+    console.log(
+      "🛠️ Re-estructurando tabla filas para Nivel 3 (UUID Migration)...",
+    );
+
     // a. Crear tabla temporal con el esquema nuevo (UUID y updated_at)
     await database.execute(`
       CREATE TABLE filas_modernizada (
@@ -2513,36 +2568,60 @@ const modernizarRespaldo = async (fileId: string) => {
     const oldRows = await database.select<any[]>("SELECT * FROM filas");
     for (const row of oldRows) {
       const newId = crypto.randomUUID();
-      await database.execute(`
+      await database.execute(
+        `
         INSERT INTO filas_modernizada 
         (id, sheet_id, dia, semana, fecha, alimento_cant, alimento_diario, alimento_acum, 
          medicina, gas_diario, gas_acum, mort_diaria, mort_acum, mort_porcentaje, observacion, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `, [
-        newId, row.sheet_id, row.dia, row.semana, row.fecha, row.alimento_cant, row.alimento_diario,
-        row.alimento_acum, row.medicina, row.gas_diario, row.gas_acum, row.mort_diaria,
-        row.mort_acum, row.mort_porcentaje, row.observacion, Math.floor(Date.now()/1000)
-      ]);
+      `,
+        [
+          newId,
+          row.sheet_id,
+          row.dia,
+          row.semana,
+          row.fecha,
+          row.alimento_cant,
+          row.alimento_diario,
+          row.alimento_acum,
+          row.medicina,
+          row.gas_diario,
+          row.gas_acum,
+          row.mort_diaria,
+          row.mort_acum,
+          row.mort_porcentaje,
+          row.observacion,
+          Math.floor(Date.now() / 1000),
+        ],
+      );
     }
 
     // c. Intercambiar tablas antiguas por las nuevas modernizadas
     await database.execute("DROP TABLE filas");
     await database.execute("ALTER TABLE filas_modernizada RENAME TO filas");
-    
+
     // 3. Crear un nuevo respaldo V3 en la nube indicando la modernización
-    mostrarToast("Arquitectura modernizada con éxito. Sincronizando nueva versión...");
-    
+    mostrarToast(
+      "Arquitectura modernizada con éxito. Sincronizando nueva versión...",
+    );
+
     // Obtenemos el path real de la db para leer el binario
     const dbPath = await invoke<string>("get_db_path");
     const dbContent = await readFile(dbPath);
     const blob = new Blob([dbContent], { type: "application/x-sqlite3" });
-    const fileToUpload = new File([blob], `pollos_backup_v3_modernized_${Date.now()}.db`, { type: "application/x-sqlite3" });
-    
-    await uploadFileDrive(fileToUpload, "backup");
-    
-    mostrarToast("✅ Proceso completado. La base de datos ahora es compatible con Sincronización Nivel 3.", "success");
-    await listBackupsDrive(); // Refrescar lista de UI
+    const fileToUpload = new File(
+      [blob],
+      `pollos_backup_v3_modernized_${Date.now()}.db`,
+      { type: "application/x-sqlite3" },
+    );
 
+    await uploadFileDrive(fileToUpload, "backup");
+
+    mostrarToast(
+      "✅ Proceso completado. La base de datos ahora es compatible con Sincronización Nivel 3.",
+      "success",
+    );
+    await listBackupsDrive(); // Refrescar lista de UI
   } catch (e) {
     console.error("Error en migración V3:", e);
     mostrarToast("Error crítico durante la migración: " + e, "error");
@@ -2772,7 +2851,10 @@ onMounted(async () => {
   // 🛡️ ESCUCHA GLOBAL DE LA VALLA DE SEGURIDAD
   // Si cualquier ventana (como la principal) detecta corrupción, el Admin debe enterarse
   listen("db-corruption-detected", (event) => {
-    console.warn("🚨 [VALLA GLOBAL] Alerta de integridad recibida de otra ventana:", event.payload);
+    console.warn(
+      "🚨 [VALLA GLOBAL] Alerta de integridad recibida de otra ventana:",
+      event.payload,
+    );
     databaseMalformed.value = true;
   });
 
@@ -2831,7 +2913,9 @@ watch(seccionActiva, (newVal) => {
         } catch (e) {
           const errorStr = String(e).toLowerCase();
           if (errorStr.includes("malformed") || errorStr.includes("code 11")) {
-            console.error("🧨 [Sabueso Agresivo] ¡TABLAS DE DATOS CORRUPTAS DETECTADAS!");
+            console.error(
+              "🧨 [Sabueso Agresivo] ¡TABLAS DE DATOS CORRUPTAS DETECTADAS!",
+            );
             databaseMalformed.value = true;
           }
         }
@@ -3071,8 +3155,9 @@ const reabrirMain = async () => {
               font-weight: 500;
             "
           >
-            Se ha detectado un fallo crítico (<b>malformed disk image</b>) que impide guardar o leer tus registros.
-            Para proteger tu información, es necesario ejecutar una reparación.
+            Se ha detectado un fallo crítico (<b>malformed disk image</b>) que
+            impide guardar o leer tus registros. Para proteger tu información,
+            es necesario ejecutar una reparación.
           </p>
           <button
             class="btn-danger"
@@ -3195,7 +3280,9 @@ const reabrirMain = async () => {
                     :key="grupo.id"
                     class="grupo-conjunto"
                   >
-                    <div class="grupo-header">{{ formatearIdParaUsuario(grupo.id) }}</div>
+                    <div class="grupo-header">
+                      {{ formatearIdParaUsuario(grupo.id) }}
+                    </div>
                     <div class="grupo-botones">
                       <button
                         v-for="g in grupo.galpones"
@@ -3247,10 +3334,13 @@ const reabrirMain = async () => {
                     <h1>CONTROL PARA POLLOS DE CARNE</h1>
                     <p class="sheet-id">
                       <strong>Código Lote:</strong>
-                      {{ formatearIdParaUsuario(currentGalpon.codigo_conjunto) }}
+                      {{
+                        formatearIdParaUsuario(currentGalpon.codigo_conjunto)
+                      }}
                     </p>
                     <p class="sheet-id">
-                      <strong>Código Galpón:</strong> {{ formatearIdParaUsuario(currentGalpon.id) }}
+                      <strong>Código Galpón:</strong>
+                      {{ formatearIdParaUsuario(currentGalpon.id) }}
                     </p>
                   </div>
                 </div>
@@ -3653,7 +3743,10 @@ const reabrirMain = async () => {
                     <h1>ESTADÍSTICAS GENERALES</h1>
                     <p class="sheet-id">
                       <strong>Código Lote:</strong>
-                      {{ formatearIdParaUsuario(galpones[0]?.codigo_conjunto) || "—" }}
+                      {{
+                        formatearIdParaUsuario(galpones[0]?.codigo_conjunto) ||
+                        "—"
+                      }}
                     </p>
                     <p class="sheet-id">
                       <strong>Nombre:</strong>
@@ -3714,7 +3807,9 @@ const reabrirMain = async () => {
                     <tbody>
                       <tr v-for="item in resumenGalpones" :key="item.id">
                         <td>{{ item.numero }}</td>
-                        <td :title="item.id">{{ formatearIdParaUsuario(item.id) }}</td>
+                        <td :title="item.id">
+                          {{ formatearIdParaUsuario(item.id) }}
+                        </td>
                         <td>{{ item.galpon }}</td>
                         <td>{{ item.lote }}</td>
                         <td>{{ item.cantidad }}</td>
@@ -3788,7 +3883,9 @@ const reabrirMain = async () => {
                         Ver
                       </button>
                     </td>
-                    <td :title="item.id">{{ formatearIdParaUsuario(item.id) }}</td>
+                    <td :title="item.id">
+                      {{ formatearIdParaUsuario(item.id) }}
+                    </td>
                     <td>{{ item.nombre || "—" }}</td>
                     <td>{{ item.granja || "—" }}</td>
                     <td>{{ item.lote || "—" }}</td>
@@ -3796,7 +3893,9 @@ const reabrirMain = async () => {
                     <td>{{ item.fecha_ingreso || "—" }}</td>
                     <td>{{ item.procedencia || "—" }}</td>
                     <td>{{ item.cantidad ?? "—" }}</td>
-                    <td :title="item.conjunto_id">{{ formatearIdParaUsuario(item.conjunto_id) }}</td>
+                    <td :title="item.conjunto_id">
+                      {{ formatearIdParaUsuario(item.conjunto_id) }}
+                    </td>
                     <td>{{ item.conjunto_nombre || "—" }}</td>
                   </tr>
 
@@ -3856,7 +3955,9 @@ const reabrirMain = async () => {
                         Ver
                       </button>
                     </td>
-                    <td :title="item.id">{{ formatearIdParaUsuario(item.id) }}</td>
+                    <td :title="item.id">
+                      {{ formatearIdParaUsuario(item.id) }}
+                    </td>
                     <td>{{ item.nombre || "—" }}</td>
                     <td>{{ item.descripcion || "—" }}</td>
                     <td>{{ item.totalGalpones }}</td>
@@ -4148,23 +4249,58 @@ const reabrirMain = async () => {
                     <tbody>
                       <tr v-for="file in backupsDrive" :key="file.id">
                         <td :title="file.name">
-                          <div style="display: flex; align-items: center; gap: 8px">
-                            <svg v-if="file.name.endsWith('.key')" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width: 16px; height: 16px; color: #f59e0b">
-                              <path d="M15 6a5 5 0 1 0-5 5v3l-1 1v2l1 1h2l1-1v-2l1-1v-3a5 5 0 0 0 4-5z" /><circle cx="15" cy="6" r="1" />
+                          <div
+                            style="display: flex; align-items: center; gap: 8px"
+                          >
+                            <svg
+                              v-if="file.name.endsWith('.key')"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              stroke-width="2"
+                              style="width: 16px; height: 16px; color: #f59e0b"
+                            >
+                              <path
+                                d="M15 6a5 5 0 1 0-5 5v3l-1 1v2l1 1h2l1-1v-2l1-1v-3a5 5 0 0 0 4-5z"
+                              />
+                              <circle cx="15" cy="6" r="1" />
                             </svg>
-                            <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width: 16px; height: 16px; color: #3b82f6">
-                              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                            <svg
+                              v-else
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              stroke-width="2"
+                              style="width: 16px; height: 16px; color: #3b82f6"
+                            >
+                              <path
+                                d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"
+                              />
                             </svg>
                             {{ formatearNombreBackup(file.name) }}
                           </div>
                         </td>
                         <td>
-                          <span 
+                          <span
                             class="location-badge"
-                            :class="file.name.includes('delta') || file.name.includes('_v3') ? 'bg-indigo-100 text-indigo-700' : 'bg-amber-100 text-amber-700'"
-                            style="font-size: 10px; border-radius: 4px; padding: 2px 6px;"
+                            :class="
+                              file.name.includes('delta') ||
+                              file.name.includes('_v3')
+                                ? 'bg-indigo-100 text-indigo-700'
+                                : 'bg-amber-100 text-amber-700'
+                            "
+                            style="
+                              font-size: 10px;
+                              border-radius: 4px;
+                              padding: 2px 6px;
+                            "
                           >
-                            {{ file.name.includes('delta') || file.name.includes('_v3') ? 'V3 (Sync)' : 'Legacy' }}
+                            {{
+                              file.name.includes("delta") ||
+                              file.name.includes("_v3")
+                                ? "Delta Sync"
+                                : "Legacy"
+                            }}
                           </span>
                         </td>
                         <td>
@@ -4179,13 +4315,17 @@ const reabrirMain = async () => {
                           <div class="row-actions">
                             <!-- BOTÓN MIGRAR (Solo para Legacy) -->
                             <button
-                               v-if="!file.name.includes('delta') && !file.name.includes('_v3') && !file.name.endsWith('.key')"
-                               class="btn-primary btn-sm"
-                               style="background: #f59e0b; border-color: #d97706;"
-                               @click="modernizarRespaldo(file.id)"
-                               title="Modernizar arquitectura para Sincronización Delta"
+                              v-if="
+                                !file.name.includes('delta') &&
+                                !file.name.includes('_v3') &&
+                                !file.name.endsWith('.key')
+                              "
+                              class="btn-primary btn-sm"
+                              style="background: #f59e0b; border-color: #d97706"
+                              @click="modernizarRespaldo(file.id)"
+                              title="Modernizar arquitectura para Sincronización Delta"
                             >
-                               Migrar V3
+                              Migrar V3
                             </button>
 
                             <button

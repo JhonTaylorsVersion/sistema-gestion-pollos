@@ -3,7 +3,7 @@ import { ref, onMounted, computed } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { fetch } from "@tauri-apps/plugin-http";
-import { readFile, writeFile, remove, exists } from "@tauri-apps/plugin-fs";
+import { readFile, writeFile } from "@tauri-apps/plugin-fs";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useNotify } from "./useNotify";
 
@@ -55,7 +55,9 @@ const dailyFileId = ref<string | null>(null);
 let deferredTimer: any = null;
 
 export const isDirty = ref(false);
-export const syncError = ref<string | null>(localStorage.getItem("google_sync_error_cache"));
+export const syncError = ref<string | null>(
+  localStorage.getItem("google_sync_error_cache"),
+);
 export const isOnline = ref(window.navigator.onLine);
 export const isDatabaseCorrupted = ref(false);
 
@@ -338,7 +340,10 @@ export function useDrive() {
       );
       const data = (await response.json()) as any;
       backups.value = data.files || [];
-      localStorage.setItem("google_backups_cache", JSON.stringify(backups.value));
+      localStorage.setItem(
+        "google_backups_cache",
+        JSON.stringify(backups.value),
+      );
 
       // Si el archivo que teníamos en caché para hoy no aparece en la lista fresca, lo olvidamos
       const dateStr = new Date().toISOString().slice(0, 10);
@@ -494,11 +499,15 @@ export function useDrive() {
     const COOLDOWN_TIME = 60 * 1000; // 60s de cooldown para el backup COMPLETO (.db)
 
     if (!manual && !force && now - lastAutoUploadTime.value < COOLDOWN_TIME) {
-      console.log(`⏱️ [Drive] Full-backup omitido por cooldown. Último hace ${Math.round((now - lastAutoUploadTime.value)/1000)}s`);
+      console.log(
+        `⏱️ [Drive] Full-backup omitido por cooldown. Último hace ${Math.round((now - lastAutoUploadTime.value) / 1000)}s`,
+      );
       if (deferredTimer) return;
 
       const remaining = COOLDOWN_TIME + 100 - (now - lastAutoUploadTime.value);
-      console.log(`⏳ [Drive] Programando auto-backup diferido en ${remaining}ms`);
+      console.log(
+        `⏳ [Drive] Programando auto-backup diferido en ${remaining}ms`,
+      );
       deferredTimer = setTimeout(() => {
         deferredTimer = null;
         uploadBackup(false, true);
@@ -507,7 +516,9 @@ export function useDrive() {
       return;
     }
 
-    console.log(`🚀 [Drive] INICIANDO BACKUP (${manual ? 'MANUAL' : 'AUTOMÁTICO'}). Force: ${force}`);
+    console.log(
+      `🚀 [Drive] INICIANDO BACKUP (${manual ? "MANUAL" : "AUTOMÁTICO"}). Force: ${force}`,
+    );
 
     try {
       loading.value = true;
@@ -559,7 +570,7 @@ export function useDrive() {
         .toLocaleTimeString("es-EC", { hour12: false })
         .replace(/:/g, "-");
 
-      const datePrefix = `pollos_backup_${dateStr}`;
+      const datePrefix = `pollos_backup_v3_${dateStr}`;
       const newFileName = `${datePrefix}_${timeStr}.db`;
 
       // Buscamos si ya existe una copia de HOY (sin importar la hora que tenga el nombre)
@@ -634,17 +645,23 @@ export function useDrive() {
         await listBackups();
         return true;
       } else {
-        console.error(`❌ [Drive] Error en respuesta de Google: ${response.status}`);
+        console.error(
+          `❌ [Drive] Error en respuesta de Google: ${response.status}`,
+        );
         // 🛡️ REPARACIÓN AUTOMÁTICA DE JERARQUÍA:
         // Si Drive nos devuelve 404 (Not Found), es probable que el usuario borrara las carpetas manualmente.
         if (response.status === 404) {
-          console.warn("📁 [Drive] Carpeta destino no encontrada (404). Reseteando caché de jerarquía...");
+          console.warn(
+            "📁 [Drive] Carpeta destino no encontrada (404). Reseteando caché de jerarquía...",
+          );
           currentMonthFolderId.value = null;
           securityKeysFolderId.value = null;
           deltasFolderId.value = null;
           // No lanzamos error aún, dejamos que el catch lo maneje o reintentamos en el próximo tick.
         }
-        throw new Error(`Fallo en la comunicación con Google Drive (${response.status}).`);
+        throw new Error(
+          `Fallo en la comunicación con Google Drive (${response.status}).`,
+        );
       }
     } catch (error) {
       console.error("Upload Error:", error);
@@ -918,7 +935,10 @@ export function useDrive() {
     }
   };
 
-  const pushDeltas = async (getMutations: () => Promise<any[]>, markSynced: (ids: number[]) => Promise<void>) => {
+  const pushDeltas = async (
+    getMutations: () => Promise<any[]>,
+    markSynced: (ids: number[]) => Promise<void>,
+  ) => {
     if (!accessToken.value || !isOnline.value) return false;
 
     try {
@@ -927,17 +947,18 @@ export function useDrive() {
 
       loading.value = true;
       const folderId = await ensureDeltasFolder();
-      
+
       const timestamp = Date.now();
       const fileName = `delta_${deviceId.value}_${timestamp}.json`;
-      
+
       const payload = {
         deviceId: deviceId.value,
         timestamp,
-        mutations: mutations.map(m => ({
+        mutations: mutations.map((m) => ({
           ...m,
-          payload: typeof m.payload === 'string' ? JSON.parse(m.payload) : m.payload
-        }))
+          payload:
+            typeof m.payload === "string" ? JSON.parse(m.payload) : m.payload,
+        })),
       };
 
       const metadata = {
@@ -947,16 +968,22 @@ export function useDrive() {
       };
 
       const formData = new FormData();
-      formData.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
-      formData.append("file", new Blob([JSON.stringify(payload)], { type: "application/json" }));
+      formData.append(
+        "metadata",
+        new Blob([JSON.stringify(metadata)], { type: "application/json" }),
+      );
+      formData.append(
+        "file",
+        new Blob([JSON.stringify(payload)], { type: "application/json" }),
+      );
 
       const response = await fetchWithAuth(
         "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart",
-        { method: "POST", body: formData }
+        { method: "POST", body: formData },
       );
 
       if (response.ok) {
-        await markSynced(mutations.map(m => m.id));
+        await markSynced(mutations.map((m) => m.id));
         console.log(`✅ Deltas subidos: ${fileName}`);
         return true;
       }
@@ -970,10 +997,10 @@ export function useDrive() {
   };
 
   const pullDeltas = async (
-    isProcessed: (fileId: string) => Promise<boolean>, 
+    isProcessed: (fileId: string) => Promise<boolean>,
     markProcessed: (fileId: string) => Promise<void>,
     applyMutation: (m: any) => Promise<void>,
-    refreshUI: () => Promise<void>
+    refreshUI: () => Promise<void>,
   ) => {
     if (!accessToken.value || !isOnline.value) return false;
 
@@ -985,7 +1012,7 @@ export function useDrive() {
       // 1. Listar archivos de deltas
       const query = `'${folderId}' in parents and name contains 'delta_' and trashed = false`;
       const response = await fetchWithAuth(
-        `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id, name, modifiedTime)&orderBy=name asc`
+        `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id, name, modifiedTime)&orderBy=name asc`,
       );
       const data = (await response.json()) as any;
       const files = data.files || [];
@@ -1001,14 +1028,14 @@ export function useDrive() {
 
         console.log(`☁️ Descargando delta remoto: ${file.name}`);
         const contentResponse = await fetchWithAuth(
-          `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`
+          `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`,
         );
 
         if (contentResponse.ok) {
           const delta = (await contentResponse.json()) as any;
-          
+
           // Aplicar mutaciones en orden
-          for (const m of (delta.mutations || [])) {
+          for (const m of delta.mutations || []) {
             await applyMutation(m);
           }
 
@@ -1019,7 +1046,10 @@ export function useDrive() {
 
       if (appliedAny) {
         await refreshUI();
-        mostrarToast("Sincronización completada: Se han integrado cambios de otros dispositivos.", "info");
+        mostrarToast(
+          "Sincronización completada: Se han integrado cambios de otros dispositivos.",
+          "info",
+        );
       }
 
       return true;
